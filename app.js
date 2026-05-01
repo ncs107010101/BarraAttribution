@@ -274,12 +274,21 @@ function renderPortfolioSeries() {
 }
 
 function renderGroupCharts(group) {
-  const labels = ["產業", "風格", "殘差"];
-  const keys = ["industry", "style", "residual"];
-  const portReturn = keys.map((k) => group.return[k].portfolio);
-  const benchReturn = keys.map((k) => group.return[k].benchmark);
-  const portVar = keys.map((k) => group.variance[k].portfolio);
-  const benchVar = keys.map((k) => group.variance[k].benchmark);
+  const hasCountry = !!(group?.return?.country && group?.variance?.country);
+  const keys = hasCountry
+    ? ["country", "industry", "style", "residual"]
+    : ["industry", "style", "residual"];
+  const labelMap = {
+    country: "\u570b\u5bb6",
+    industry: "\u7522\u696d",
+    style: "\u98a8\u683c",
+    residual: "\u6b98\u5dee",
+  };
+  const labels = keys.map((k) => labelMap[k] || k);
+  const portReturn = keys.map((k) => group?.return?.[k]?.portfolio ?? 0);
+  const benchReturn = keys.map((k) => group?.return?.[k]?.benchmark ?? 0);
+  const portVar = keys.map((k) => group?.variance?.[k]?.portfolio ?? 0);
+  const benchVar = keys.map((k) => group?.variance?.[k]?.benchmark ?? 0);
 
   function groupedBars(id, yPort, yBench, title) {
     const traces = [
