@@ -369,40 +369,44 @@ function renderPortfolioTab() {
 }
 
 function renderStockMetrics(record) {
+  const activeWeight =
+    record.weightPort != null && record.weightBench != null
+      ? record.weightPort - record.weightBench
+      : null;
+
   renderMetricCards("stock-metrics", [
-    { label: "個股報酬率", value: fmtPct(record.return), rawValue: record.return },
-    { label: "個股變異數", value: fmtPct(record.variance), rawValue: record.variance },
-    { label: "w_port", value: fmtPct(record.weightPort), rawValue: record.weightPort },
-    { label: "w_bench", value: fmtPct(record.weightBench), rawValue: record.weightBench },
     {
-      label: "產業報酬拆解",
+      label: "\u500b\u80a1\u5831\u916c\u7387",
+      value: fmtPct(record.return),
+      rawValue: record.return,
+      details: [{ label: "\u500b\u80a1\u8b8a\u7570\u6578", value: fmtPct(record.variance) }],
+    },
+    {
+      label: "Portfolio \u6b0a\u91cd",
+      value: fmtPct(record.weightPort),
+      rawValue: activeWeight,
+      details: [
+        { label: "Benchmark \u6b0a\u91cd", value: fmtPct(record.weightBench) },
+        { label: "Active \u6b0a\u91cd", value: fmtPct(activeWeight) },
+      ],
+    },
+    {
+      label: "\u7fa4\u7d44\u5831\u916c\u62c6\u89e3",
       value: fmtPct(record.groupReturn.industry),
       rawValue: record.groupReturn.industry,
+      details: [
+        { label: "\u98a8\u683c", value: fmtPct(record.groupReturn.style) },
+        { label: "\u6b98\u5dee", value: fmtPct(record.groupReturn.residual) },
+      ],
     },
     {
-      label: "風格報酬拆解",
-      value: fmtPct(record.groupReturn.style),
-      rawValue: record.groupReturn.style,
-    },
-    {
-      label: "殘差報酬拆解",
-      value: fmtPct(record.groupReturn.residual),
-      rawValue: record.groupReturn.residual,
-    },
-    {
-      label: "產業變異數拆解",
+      label: "\u7fa4\u7d44\u8b8a\u7570\u6578\u62c6\u89e3",
       value: fmtPct(record.groupVariance.industry),
       rawValue: record.groupVariance.industry,
-    },
-    {
-      label: "風格變異數拆解",
-      value: fmtPct(record.groupVariance.style),
-      rawValue: record.groupVariance.style,
-    },
-    {
-      label: "殘差變異數拆解",
-      value: fmtPct(record.groupVariance.residual),
-      rawValue: record.groupVariance.residual,
+      details: [
+        { label: "\u98a8\u683c", value: fmtPct(record.groupVariance.style) },
+        { label: "\u6b98\u5dee", value: fmtPct(record.groupVariance.residual) },
+      ],
     },
   ]);
 }
@@ -543,32 +547,7 @@ function renderStockTab() {
 
 function renderFactorTab() {
   const factors = state.payload.factorStats.factors;
-  const dates = state.payload.meta.dates;
   const returnsByMonth = state.payload.factorStats.returnsByMonth;
-  const labels = prettyFactorList(factors);
-
-  const z = factors.map((factor) => dates.map((d) => returnsByMonth[d]?.[factor] ?? null));
-
-  plot(
-    "chart-factor-heatmap",
-    [
-      {
-        x: dates,
-        y: labels,
-        z,
-        type: "heatmap",
-        colorscale: "RdBu",
-        reversescale: true,
-        zmid: 0,
-        colorbar: { title: "Return" },
-      },
-    ],
-    {
-      margin: { l: 110, r: 18, t: 26, b: 72 },
-      xaxis: { title: "Month" },
-      yaxis: { automargin: true },
-    }
-  );
 
   const sorted = factors
     .map((factor) => ({ factor, value: returnsByMonth[state.month]?.[factor] ?? null }))
