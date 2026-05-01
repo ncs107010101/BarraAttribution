@@ -206,8 +206,8 @@ function renderPortfolioMetrics(metrics, group) {
       value: fmtPct(metrics.trackingError),
       rawValue: metrics.trackingError,
       details: [
-        { label: "sum w_port", value: fmtPct(group.investedWeight.portfolio) },
-        { label: "sum w_bench", value: fmtPct(group.investedWeight.benchmark) },
+        { label: "Benchmark", value: "-" },
+        { label: "Active", value: fmtPct(metrics.trackingError) },
       ],
     },
   ]);
