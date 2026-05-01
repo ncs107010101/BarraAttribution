@@ -72,14 +72,18 @@ function prettyFactorList(factors) {
 function renderMetricCards(containerId, cards) {
   const container = document.getElementById(containerId);
   container.innerHTML = cards
-    .map(
-      (card) => `
+    .map((card) => {
+      const details = (card.details || [])
+        .map((d) => `<div class="metric-sub">${d.label}: <strong>${d.value}</strong></div>`)
+        .join("");
+      return `
       <article class="metric-card">
         <div class="label">${card.label}</div>
         <div class="value ${valueClass(card.rawValue)}">${card.value}</div>
+        ${details}
       </article>
-    `
-    )
+    `;
+    })
     .join("");
 }
 
@@ -168,37 +172,43 @@ function nearZeroAnnotation(enabled) {
 }
 
 function renderPortfolioMetrics(metrics, group) {
+  const activeVariance = metrics.trackingError != null ? metrics.trackingError ** 2 : null;
   renderMetricCards("portfolio-metrics", [
-    { label: "Portfolio Return", value: fmtPct(metrics.returnPort), rawValue: metrics.returnPort },
-    { label: "Benchmark Return", value: fmtPct(metrics.returnBench), rawValue: metrics.returnBench },
-    { label: "Active Return", value: fmtPct(metrics.returnActive), rawValue: metrics.returnActive },
     {
-      label: "Portfolio Variance",
+      label: "Return",
+      value: fmtPct(metrics.returnPort),
+      rawValue: metrics.returnPort,
+      details: [
+        { label: "Benchmark", value: fmtPct(metrics.returnBench) },
+        { label: "Active", value: fmtPct(metrics.returnActive) },
+      ],
+    },
+    {
+      label: "Variance",
       value: fmtPct(metrics.variancePort),
       rawValue: metrics.variancePort,
+      details: [
+        { label: "Benchmark", value: fmtPct(metrics.varianceBench) },
+        { label: "Active (TE^2)", value: fmtPct(activeVariance) },
+      ],
     },
     {
-      label: "Benchmark Variance",
-      value: fmtPct(metrics.varianceBench),
-      rawValue: metrics.varianceBench,
+      label: "Sharpe / IR",
+      value: fmtNum(metrics.sharpePort),
+      rawValue: metrics.sharpePort,
+      details: [
+        { label: "Benchmark Sharpe", value: fmtNum(metrics.sharpeBench) },
+        { label: "Active IR", value: fmtNum(metrics.information) },
+      ],
     },
-    { label: "Portfolio Sharpe", value: fmtNum(metrics.sharpePort), rawValue: metrics.sharpePort },
-    { label: "Benchmark Sharpe", value: fmtNum(metrics.sharpeBench), rawValue: metrics.sharpeBench },
-    { label: "Information", value: fmtNum(metrics.information), rawValue: metrics.information },
     {
       label: "Tracking Error",
       value: fmtPct(metrics.trackingError),
       rawValue: metrics.trackingError,
-    },
-    {
-      label: "sum w_port",
-      value: fmtPct(group.investedWeight.portfolio),
-      rawValue: group.investedWeight.portfolio,
-    },
-    {
-      label: "sum w_bench",
-      value: fmtPct(group.investedWeight.benchmark),
-      rawValue: group.investedWeight.benchmark,
+      details: [
+        { label: "sum w_port", value: fmtPct(group.investedWeight.portfolio) },
+        { label: "sum w_bench", value: fmtPct(group.investedWeight.benchmark) },
+      ],
     },
   ]);
 }
@@ -302,7 +312,7 @@ function renderGroupCharts(group) {
   groupedBars("chart-group-variance", portVar, benchVar, "Variance");
 }
 
-function renderFactorCompareCharts(rows, prefix) {
+function renderFactorCompareCharts(rows, prefix, withBenchmark = true) {
   const labels = prettyFactorList(rows.map((r) => r.factor));
   const portReturn = rows.map((r) => r.portfolio.return);
   const benchReturn = rows.map((r) => r.benchmark.return);
@@ -321,23 +331,26 @@ function renderFactorCompareCharts(rows, prefix) {
         name: "Portfolio",
         marker: { color: COLOR.portfolio },
       },
-      {
+    ];
+
+    if (withBenchmark) {
+      traces.push({
         y: labels,
         x: right,
         type: "bar",
         orientation: "h",
         name: "Benchmark",
         marker: { color: COLOR.benchmark },
-      },
-    ];
-    const zeroMarkers = zeroMarkerTraceHorizontal(labels, right);
-    if (zeroMarkers) traces.push(zeroMarkers);
+      });
+      const zeroMarkers = zeroMarkerTraceHorizontal(labels, right);
+      if (zeroMarkers) traces.push(zeroMarkers);
+    }
 
     plot(id, traces, {
       barmode: "group",
       xaxis: { title, tickformat: percent ? ".2%" : ",.3f" },
       yaxis: { automargin: true, categoryorder: "total ascending" },
-      annotations: nearZeroAnnotation(allNearZero(right)),
+      annotations: withBenchmark ? nearZeroAnnotation(allNearZero(right)) : [],
     });
   }
 
@@ -351,8 +364,8 @@ function renderPortfolioTab() {
   renderPortfolioMetrics(metrics, group);
   renderPortfolioSeries();
   renderGroupCharts(group);
-  renderFactorCompareCharts(industryRows, "industry");
-  renderFactorCompareCharts(styleRows, "style");
+  renderFactorCompareCharts(industryRows, "industry", true);
+  renderFactorCompareCharts(styleRows, "style", false);
 }
 
 function renderStockMetrics(record) {

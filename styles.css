@@ -156,6 +156,12 @@ select {
   color: var(--accent);
 }
 
+.metric-card .metric-sub {
+  margin-top: 3px;
+  color: var(--ink-1);
+  font-size: 0.78rem;
+}
+
 .chart-grid {
   display: grid;
   gap: 12px;
