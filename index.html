@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Barra 因子歸因儀表板</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <h1>Barra 因子歸因儀表板</h1>
+        <p>GitHub Pages 靜態站，資料來源：tw_50_data output parquet</p>
+      </header>
+
+      <section class="controls">
+        <label class="control">
+          <span>月份</span>
+          <select id="month-select"></select>
+        </label>
+        <label class="control">
+          <span>個股</span>
+          <select id="stock-select"></select>
+        </label>
+      </section>
+
+      <nav class="tabs">
+        <button class="tab-button is-active" data-tab="tab-portfolio" type="button">
+          Portfolio 因子歸因層級
+        </button>
+        <button class="tab-button" data-tab="tab-stock" type="button">
+          個股因子歸因層級
+        </button>
+        <button class="tab-button" data-tab="tab-factor" type="button">
+          因子統計
+        </button>
+      </nav>
+
+      <main>
+        <section id="tab-portfolio" class="tab-panel is-active">
+          <h2>Portfolio 因子歸因層級</h2>
+          <div id="portfolio-metrics" class="metric-grid"></div>
+
+          <div class="chart-grid two-col">
+            <article class="card">
+              <h3>累積報酬率走勢 (Portfolio vs Benchmark)</h3>
+              <div id="chart-cum-returns" class="chart"></div>
+            </article>
+            <article class="card">
+              <h3>Active Return 走勢</h3>
+              <div id="chart-active-return" class="chart"></div>
+            </article>
+          </div>
+
+          <div class="chart-grid three-col">
+            <article class="card">
+              <h3>群組報酬拆解 (產業 / 風格 / 殘差)</h3>
+              <div id="chart-group-return" class="chart"></div>
+            </article>
+            <article class="card">
+              <h3>群組變異數拆解 (產業 / 風格 / 殘差)</h3>
+              <div id="chart-group-variance" class="chart"></div>
+            </article>
+            <article class="card">
+              <h3>群組權重指標 (產業 / 風格 / 殘差)</h3>
+              <div id="chart-group-weight" class="chart"></div>
+            </article>
+          </div>
+
+          <div class="chart-grid three-col">
+            <article class="card">
+              <h3>產業子因子報酬拆解</h3>
+              <div id="chart-industry-return" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>產業子因子變異數拆解</h3>
+              <div id="chart-industry-variance" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>產業子因子權重</h3>
+              <div id="chart-industry-weight" class="chart tall"></div>
+            </article>
+          </div>
+
+          <div class="chart-grid three-col">
+            <article class="card">
+              <h3>風格子因子報酬拆解</h3>
+              <div id="chart-style-return" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>風格子因子變異數拆解</h3>
+              <div id="chart-style-variance" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>風格子因子權重 (Σw×exposure)</h3>
+              <div id="chart-style-weight" class="chart tall"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-stock" class="tab-panel">
+          <h2>個股因子歸因層級</h2>
+          <div id="stock-metrics" class="metric-grid"></div>
+
+          <div class="chart-grid two-col">
+            <article class="card">
+              <h3>個股群組報酬拆解 (產業 / 風格 / 殘差)</h3>
+              <div id="chart-stock-group-return" class="chart"></div>
+            </article>
+            <article class="card">
+              <h3>個股群組變異數拆解 (產業 / 風格 / 殘差)</h3>
+              <div id="chart-stock-group-variance" class="chart"></div>
+            </article>
+          </div>
+
+          <div class="chart-grid three-col">
+            <article class="card">
+              <h3>產業子因子曝險</h3>
+              <div id="chart-stock-industry-exposure" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>產業子因子報酬拆解</h3>
+              <div id="chart-stock-industry-return" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>產業子因子變異數拆解</h3>
+              <div id="chart-stock-industry-variance" class="chart tall"></div>
+            </article>
+          </div>
+
+          <div class="chart-grid three-col">
+            <article class="card">
+              <h3>風格子因子曝險</h3>
+              <div id="chart-stock-style-exposure" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>風格子因子報酬拆解</h3>
+              <div id="chart-stock-style-return" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>風格子因子變異數拆解</h3>
+              <div id="chart-stock-style-variance" class="chart tall"></div>
+            </article>
+          </div>
+
+          <article class="card">
+            <h3>個股在所有因子中的曝險</h3>
+            <div id="chart-stock-all-exposure" class="chart tall"></div>
+          </article>
+        </section>
+
+        <section id="tab-factor" class="tab-panel">
+          <h2>因子統計</h2>
+          <div class="chart-grid two-col">
+            <article class="card">
+              <h3>因子報酬 Heatmap</h3>
+              <div id="chart-factor-heatmap" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>選定月份因子報酬橫截面</h3>
+              <div id="chart-factor-cross" class="chart tall"></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
