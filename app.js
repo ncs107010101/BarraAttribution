@@ -8,8 +8,8 @@ const monthSelect = document.getElementById("month-select");
 const stockSelect = document.getElementById("stock-select");
 
 const COLOR = {
-  port: "#0f766e",
-  bench: "#ea580c",
+  portfolio: "#0f766e",
+  benchmark: "#ea580c",
   active: "#2563eb",
   residual: "#dc2626",
   industry: "#0ea5a4",
@@ -38,19 +38,27 @@ function mergeLayout(extra) {
   };
 }
 
-function fmtPct(v) {
-  if (v === null || v === undefined || Number.isNaN(v)) return "N/A";
-  return `${(v * 100).toFixed(2)}%`;
+function isNearZero(value, eps = 1e-10) {
+  return Math.abs(Number(value || 0)) <= eps;
 }
 
-function fmtNum(v, digits = 4) {
-  if (v === null || v === undefined || Number.isNaN(v)) return "N/A";
-  return Number(v).toFixed(digits);
+function allNearZero(values, eps = 1e-10) {
+  return (values || []).every((v) => isNearZero(v, eps));
 }
 
-function valueClass(v) {
-  if (v === null || v === undefined || Number.isNaN(v)) return "";
-  return v >= 0 ? "pos" : "neg";
+function fmtPct(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
+  return `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function fmtNum(value, digits = 4) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
+  return Number(value).toFixed(digits);
+}
+
+function valueClass(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  return value >= 0 ? "pos" : "neg";
 }
 
 function factorLabel(factor) {
@@ -58,7 +66,7 @@ function factorLabel(factor) {
 }
 
 function prettyFactorList(factors) {
-  return factors.map((f) => factorLabel(f));
+  return (factors || []).map((f) => factorLabel(f));
 }
 
 function renderMetricCards(containerId, cards) {
@@ -91,15 +99,72 @@ function getPortfolioDataByMonth(month) {
 function updateStockOptions() {
   const monthData = state.payload.stocks.byMonth[state.month];
   const assets = monthData?.assets || [];
-  stockSelect.innerHTML = assets
-    .map((asset) => `<option value="${asset}">${asset}</option>`)
-    .join("");
+  stockSelect.innerHTML = assets.map((a) => `<option value="${a}">${a}</option>`).join("");
+
   if (!assets.length) {
     state.stock = null;
     return;
   }
+
   if (!assets.includes(state.stock)) state.stock = assets[0];
   stockSelect.value = state.stock;
+}
+
+function zeroMarkerTraceVertical(categories, values) {
+  const x = [];
+  const y = [];
+  categories.forEach((c, i) => {
+    if (isNearZero(values[i])) {
+      x.push(c);
+      y.push(0);
+    }
+  });
+  if (!x.length) return null;
+  return {
+    type: "scatter",
+    mode: "markers",
+    x,
+    y,
+    showlegend: false,
+    marker: { color: COLOR.benchmark, size: 8, symbol: "diamond-open" },
+    hovertemplate: "Benchmark ≈ 0<extra></extra>",
+  };
+}
+
+function zeroMarkerTraceHorizontal(categories, values) {
+  const x = [];
+  const y = [];
+  categories.forEach((c, i) => {
+    if (isNearZero(values[i])) {
+      x.push(0);
+      y.push(c);
+    }
+  });
+  if (!x.length) return null;
+  return {
+    type: "scatter",
+    mode: "markers",
+    x,
+    y,
+    showlegend: false,
+    marker: { color: COLOR.benchmark, size: 7, symbol: "diamond-open" },
+    hovertemplate: "Benchmark ≈ 0<extra></extra>",
+  };
+}
+
+function nearZeroAnnotation(enabled) {
+  if (!enabled) return [];
+  return [
+    {
+      xref: "paper",
+      yref: "paper",
+      x: 1,
+      y: 1.15,
+      text: "Benchmark 在此圖接近 0",
+      showarrow: false,
+      font: { size: 11, color: COLOR.benchmark },
+    },
+  ];
 }
 
 function renderPortfolioMetrics(metrics, group) {
@@ -126,12 +191,12 @@ function renderPortfolioMetrics(metrics, group) {
       rawValue: metrics.trackingError,
     },
     {
-      label: "Σw_port",
+      label: "sum w_port",
       value: fmtPct(group.investedWeight.portfolio),
       rawValue: group.investedWeight.portfolio,
     },
     {
-      label: "Σw_bench",
+      label: "sum w_bench",
       value: fmtPct(group.investedWeight.benchmark),
       rawValue: group.investedWeight.benchmark,
     },
@@ -141,27 +206,23 @@ function renderPortfolioMetrics(metrics, group) {
 function renderPortfolioSeries() {
   const series = state.payload.portfolio.series;
   const dates = series.map((s) => s.date);
-  const cumPort = series.map((s) => s.cumPort);
-  const cumBench = series.map((s) => s.cumBench);
-  const activeMonthly = series.map((s) => s.returnActive);
-  const activeCum = series.map((s) => s.cumActive);
 
   plot(
     "chart-cum-returns",
     [
       {
         x: dates,
-        y: cumPort,
+        y: series.map((s) => s.cumPort),
         mode: "lines+markers",
         name: "Portfolio",
-        line: { color: COLOR.port, width: 2.5 },
+        line: { color: COLOR.portfolio, width: 2.5 },
       },
       {
         x: dates,
-        y: cumBench,
+        y: series.map((s) => s.cumBench),
         mode: "lines+markers",
         name: "Benchmark",
-        line: { color: COLOR.bench, width: 2.5 },
+        line: { color: COLOR.benchmark, width: 2.5 },
       },
     ],
     {
@@ -175,14 +236,14 @@ function renderPortfolioSeries() {
     [
       {
         x: dates,
-        y: activeMonthly,
+        y: series.map((s) => s.returnActive),
         type: "bar",
         name: "Monthly Active Return",
-        marker: { color: COLOR.active, opacity: 0.7 },
+        marker: { color: COLOR.active, opacity: 0.72 },
       },
       {
         x: dates,
-        y: activeCum,
+        y: series.map((s) => s.cumActive),
         mode: "lines+markers",
         name: "Cumulative Active Return",
         yaxis: "y2",
@@ -204,33 +265,41 @@ function renderPortfolioSeries() {
 
 function renderGroupCharts(group) {
   const labels = ["產業", "風格", "殘差"];
-  const groupKeys = ["industry", "style", "residual"];
-  const portReturn = groupKeys.map((k) => group.return[k].portfolio);
-  const benchReturn = groupKeys.map((k) => group.return[k].benchmark);
-  const portVar = groupKeys.map((k) => group.variance[k].portfolio);
-  const benchVar = groupKeys.map((k) => group.variance[k].benchmark);
-  const portWeight = groupKeys.map((k) => group.weight[k].portfolio);
-  const benchWeight = groupKeys.map((k) => group.weight[k].benchmark);
+  const keys = ["industry", "style", "residual"];
+  const portReturn = keys.map((k) => group.return[k].portfolio);
+  const benchReturn = keys.map((k) => group.return[k].benchmark);
+  const portVar = keys.map((k) => group.variance[k].portfolio);
+  const benchVar = keys.map((k) => group.variance[k].benchmark);
 
-  const groupedBars = (id, yPort, yBench, yTitle) =>
-    plot(
-      id,
-      [
-        { x: labels, y: yPort, type: "bar", name: "Portfolio", marker: { color: COLOR.port } },
-        {
-          x: labels,
-          y: yBench,
-          type: "bar",
-          name: "Benchmark",
-          marker: { color: COLOR.bench },
-        },
-      ],
-      { barmode: "group", yaxis: { title: yTitle, tickformat: ".2%" } }
-    );
+  function groupedBars(id, yPort, yBench, title) {
+    const traces = [
+      {
+        x: labels,
+        y: yPort,
+        type: "bar",
+        name: "Portfolio",
+        marker: { color: COLOR.portfolio },
+      },
+      {
+        x: labels,
+        y: yBench,
+        type: "bar",
+        name: "Benchmark",
+        marker: { color: COLOR.benchmark },
+      },
+    ];
+    const zeroMarkers = zeroMarkerTraceVertical(labels, yBench);
+    if (zeroMarkers) traces.push(zeroMarkers);
+
+    plot(id, traces, {
+      barmode: "group",
+      yaxis: { title, tickformat: ".2%" },
+      annotations: nearZeroAnnotation(allNearZero(yBench)),
+    });
+  }
 
   groupedBars("chart-group-return", portReturn, benchReturn, "Return");
   groupedBars("chart-group-variance", portVar, benchVar, "Variance");
-  groupedBars("chart-group-weight", portWeight, benchWeight, "Weight Metric");
 }
 
 function renderFactorCompareCharts(rows, prefix) {
@@ -242,43 +311,39 @@ function renderFactorCompareCharts(rows, prefix) {
   const portWeight = rows.map((r) => r.portfolio.weight);
   const benchWeight = rows.map((r) => r.benchmark.weight);
 
-  const makeHorizontal = (id, portY, benchY, title, isPercent = true) => {
-    plot(
-      id,
-      [
-        {
-          y: labels,
-          x: portY,
-          type: "bar",
-          orientation: "h",
-          name: "Portfolio",
-          marker: { color: COLOR.port },
-        },
-        {
-          y: labels,
-          x: benchY,
-          type: "bar",
-          orientation: "h",
-          name: "Benchmark",
-          marker: { color: COLOR.bench },
-        },
-      ],
+  function hGroup(id, left, right, title, percent = true) {
+    const traces = [
       {
-        barmode: "group",
-        xaxis: { title, tickformat: isPercent ? ".2%" : ",.3f" },
-        yaxis: { automargin: true, categoryorder: "total ascending" },
-      }
-    );
-  };
+        y: labels,
+        x: left,
+        type: "bar",
+        orientation: "h",
+        name: "Portfolio",
+        marker: { color: COLOR.portfolio },
+      },
+      {
+        y: labels,
+        x: right,
+        type: "bar",
+        orientation: "h",
+        name: "Benchmark",
+        marker: { color: COLOR.benchmark },
+      },
+    ];
+    const zeroMarkers = zeroMarkerTraceHorizontal(labels, right);
+    if (zeroMarkers) traces.push(zeroMarkers);
 
-  makeHorizontal(`chart-${prefix}-return`, portReturn, benchReturn, "Return Contribution");
-  makeHorizontal(
-    `chart-${prefix}-variance`,
-    portVar,
-    benchVar,
-    "Variance Contribution"
-  );
-  makeHorizontal(`chart-${prefix}-weight`, portWeight, benchWeight, "Weight / Exposure", false);
+    plot(id, traces, {
+      barmode: "group",
+      xaxis: { title, tickformat: percent ? ".2%" : ",.3f" },
+      yaxis: { automargin: true, categoryorder: "total ascending" },
+      annotations: nearZeroAnnotation(allNearZero(right)),
+    });
+  }
+
+  hGroup(`chart-${prefix}-return`, portReturn, benchReturn, "Return Contribution");
+  hGroup(`chart-${prefix}-variance`, portVar, benchVar, "Variance Contribution");
+  hGroup(`chart-${prefix}-weight`, portWeight, benchWeight, "Weight / Exposure", false);
 }
 
 function renderPortfolioTab() {
@@ -331,11 +396,7 @@ function renderStockMetrics(record) {
 
 function renderStockGroupCharts(record) {
   const labels = ["產業", "風格", "殘差"];
-  const ret = [
-    record.groupReturn.industry,
-    record.groupReturn.style,
-    record.groupReturn.residual,
-  ];
+  const ret = [record.groupReturn.industry, record.groupReturn.style, record.groupReturn.residual];
   const vari = [
     record.groupVariance.industry,
     record.groupVariance.style,
@@ -344,13 +405,27 @@ function renderStockGroupCharts(record) {
 
   plot(
     "chart-stock-group-return",
-    [{ x: labels, y: ret, type: "bar", marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] } }],
+    [
+      {
+        x: labels,
+        y: ret,
+        type: "bar",
+        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
+      },
+    ],
     { yaxis: { tickformat: ".2%", title: "Return" } }
   );
 
   plot(
     "chart-stock-group-variance",
-    [{ x: labels, y: vari, type: "bar", marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] } }],
+    [
+      {
+        x: labels,
+        y: vari,
+        type: "bar",
+        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
+      },
+    ],
     { yaxis: { tickformat: ".2%", title: "Variance" } }
   );
 }
@@ -358,8 +433,8 @@ function renderStockGroupCharts(record) {
 function renderStockFactorBreakdown(record, factors, prefix) {
   const labels = prettyFactorList(factors.map((f) => f.factor));
   const exposures = factors.map((f) => f.exposure);
-  const returnContrib = factors.map((f) => f.returnContribution);
-  const varianceContrib = factors.map((f) => f.varianceContribution);
+  const retContrib = factors.map((f) => f.returnContribution);
+  const varContrib = factors.map((f) => f.varianceContribution);
 
   plot(
     `chart-stock-${prefix}-exposure`,
@@ -380,10 +455,10 @@ function renderStockFactorBreakdown(record, factors, prefix) {
     [
       {
         y: labels,
-        x: returnContrib,
+        x: retContrib,
         type: "bar",
         orientation: "h",
-        marker: { color: prefix === "industry" ? COLOR.port : COLOR.bench },
+        marker: { color: prefix === "industry" ? COLOR.portfolio : COLOR.benchmark },
       },
     ],
     { xaxis: { title: "Return Contribution", tickformat: ".2%" }, yaxis: { automargin: true } }
@@ -394,43 +469,34 @@ function renderStockFactorBreakdown(record, factors, prefix) {
     [
       {
         y: labels,
-        x: varianceContrib,
+        x: varContrib,
         type: "bar",
         orientation: "h",
         marker: { color: "#334155" },
       },
     ],
-    {
-      xaxis: { title: "Variance Contribution", tickformat: ".2%" },
-      yaxis: { automargin: true },
-    }
+    { xaxis: { title: "Variance Contribution", tickformat: ".2%" }, yaxis: { automargin: true } }
   );
 }
 
 function renderStockAllExposure(record) {
-  const ind = record.industryFactors.map((x) => ({
-    factor: x.factor,
-    exposure: x.exposure,
-  }));
-  const sty = record.styleFactors.map((x) => ({
-    factor: x.factor,
-    exposure: x.exposure,
-  }));
+  const industry = record.industryFactors || [];
+  const style = record.styleFactors || [];
 
   plot(
     "chart-stock-all-exposure",
     [
       {
-        y: prettyFactorList(ind.map((x) => x.factor)),
-        x: ind.map((x) => x.exposure),
+        y: prettyFactorList(industry.map((x) => x.factor)),
+        x: industry.map((x) => x.exposure),
         type: "bar",
         orientation: "h",
         name: "Industry",
         marker: { color: COLOR.industry },
       },
       {
-        y: prettyFactorList(sty.map((x) => x.factor)),
-        x: sty.map((x) => x.exposure),
+        y: prettyFactorList(style.map((x) => x.factor)),
+        x: style.map((x) => x.exposure),
         type: "bar",
         orientation: "h",
         name: "Style",
@@ -448,12 +514,13 @@ function renderStockAllExposure(record) {
 function renderStockTab() {
   const monthData = state.payload.stocks.byMonth[state.month];
   if (!monthData?.assets?.length) return;
+
   if (!state.stock || !monthData.records[state.stock]) {
     state.stock = monthData.assets[0];
     stockSelect.value = state.stock;
   }
-  const record = monthData.records[state.stock];
 
+  const record = monthData.records[state.stock];
   renderStockMetrics(record);
   renderStockGroupCharts(record);
   renderStockFactorBreakdown(record, record.industryFactors, "industry");
@@ -465,18 +532,16 @@ function renderFactorTab() {
   const factors = state.payload.factorStats.factors;
   const dates = state.payload.meta.dates;
   const returnsByMonth = state.payload.factorStats.returnsByMonth;
+  const labels = prettyFactorList(factors);
 
-  const z = factors.map((factor) =>
-    dates.map((d) => returnsByMonth[d]?.[factor] ?? null)
-  );
-  const yLabels = prettyFactorList(factors);
+  const z = factors.map((factor) => dates.map((d) => returnsByMonth[d]?.[factor] ?? null));
 
   plot(
     "chart-factor-heatmap",
     [
       {
         x: dates,
-        y: yLabels,
+        y: labels,
         z,
         type: "heatmap",
         colorscale: "RdBu",
@@ -492,24 +557,19 @@ function renderFactorTab() {
     }
   );
 
-  const rows = factors
-    .map((factor) => ({
-      factor,
-      value: returnsByMonth[state.month]?.[factor] ?? null,
-    }))
+  const sorted = factors
+    .map((factor) => ({ factor, value: returnsByMonth[state.month]?.[factor] ?? null }))
     .sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
 
   plot(
     "chart-factor-cross",
     [
       {
-        y: prettyFactorList(rows.map((r) => r.factor)),
-        x: rows.map((r) => r.value),
+        y: prettyFactorList(sorted.map((r) => r.factor)),
+        x: sorted.map((r) => r.value),
         type: "bar",
         orientation: "h",
-        marker: {
-          color: rows.map((r) => (r.value >= 0 ? COLOR.port : COLOR.residual)),
-        },
+        marker: { color: sorted.map((r) => ((r.value || 0) >= 0 ? COLOR.portfolio : COLOR.residual)) },
       },
     ],
     {
@@ -531,19 +591,19 @@ function bindTabs() {
   const panels = document.querySelectorAll(".tab-panel");
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
-      const targetId = button.getAttribute("data-tab");
+      const target = button.getAttribute("data-tab");
       buttons.forEach((b) => b.classList.remove("is-active"));
       panels.forEach((p) => p.classList.remove("is-active"));
       button.classList.add("is-active");
-      document.getElementById(targetId).classList.add("is-active");
+      document.getElementById(target).classList.add("is-active");
     });
   });
 }
 
 async function loadPayload() {
-  const response = await fetch("./data/payload.json", { cache: "no-store" });
-  if (!response.ok) throw new Error(`Failed to load payload.json (${response.status})`);
-  return response.json();
+  const res = await fetch("./data/payload.json", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load payload.json (${res.status})`);
+  return res.json();
 }
 
 function initSelectors() {
@@ -555,13 +615,14 @@ function initSelectors() {
 }
 
 function bindControls() {
-  monthSelect.addEventListener("change", (event) => {
-    state.month = event.target.value;
+  monthSelect.addEventListener("change", (e) => {
+    state.month = e.target.value;
     updateStockOptions();
     renderAll();
   });
-  stockSelect.addEventListener("change", (event) => {
-    state.stock = event.target.value;
+
+  stockSelect.addEventListener("change", (e) => {
+    state.stock = e.target.value;
     renderStockTab();
   });
 }
@@ -579,7 +640,7 @@ async function init() {
       <div class="card">
         <h2>載入失敗</h2>
         <p>${error.message}</p>
-        <p>請確認 <code>frontend/data/payload.json</code> 是否存在，並使用靜態伺服器開啟頁面。</p>
+        <p>請確認 <code>frontend/data/payload.json</code> 存在，並用靜態伺服器開啟。</p>
       </div>
     `;
     console.error(error);
