@@ -54,11 +54,22 @@ body {
   color: var(--ink-1);
 }
 
+.benchmark-note {
+  margin-top: 8px;
+  font-size: 0.9rem;
+  color: #0b5f75;
+}
+
 .controls {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   margin-bottom: 12px;
+}
+
+.controls-compact {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-bottom: 10px;
 }
 
 .control {
@@ -84,6 +95,16 @@ select {
   color: var(--ink-0);
   font-size: 0.96rem;
   padding: 7px 10px;
+}
+
+select[multiple] {
+  min-height: 220px;
+  padding: 8px;
+}
+
+.hint {
+  color: var(--ink-1);
+  font-size: 0.78rem;
 }
 
 .tabs {
@@ -120,6 +141,54 @@ select {
 .tab-panel h2 {
   margin: 2px 0 12px;
   font-size: 1.2rem;
+}
+
+.panel-note {
+  margin: 0 0 10px;
+  color: var(--ink-1);
+  font-size: 0.9rem;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow: auto;
+}
+
+.factor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.factor-table th,
+.factor-table td {
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  padding: 8px 10px;
+  vertical-align: middle;
+}
+
+.factor-table th {
+  background: #f3f7fa;
+  color: var(--ink-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.dir-up {
+  color: var(--brand-0);
+  font-weight: 600;
+}
+
+.dir-down {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dir-flat {
+  color: #64748b;
+  font-weight: 600;
 }
 
 .metric-grid {
@@ -172,6 +241,10 @@ select {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
 
+.chart-grid.one-col {
+  grid-template-columns: 1fr;
+}
+
 .chart-grid.three-col {
   grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
 }
@@ -215,5 +288,13 @@ select {
 
   .hero h1 {
     font-size: 1.3rem;
+  }
+
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  select[multiple] {
+    min-height: 180px;
   }
 }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Barra 因子歸因儀表板</title>
+    <title>Barra 多基金歸因比較</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,8 +17,9 @@
   <body>
     <div class="shell">
       <header class="hero">
-        <h1>Barra 因子歸因儀表板</h1>
-        <p>GitHub Pages 靜態站，資料來源：tw_50_data output parquet</p>
+        <h1>Barra 多基金歸因比較</h1>
+        <p>資料來源：tw_multiFund 多基金次月對齊結果，可同時比較最多 5 檔基金。</p>
+        <p id="benchmark-note" class="benchmark-note"></p>
       </header>
 
       <section class="controls">
@@ -27,138 +28,198 @@
           <select id="month-select"></select>
         </label>
         <label class="control">
-          <span>個股</span>
-          <select id="stock-select"></select>
+          <span>基金（最多 5 檔）</span>
+          <select id="fund-select" multiple size="10"></select>
+          <small id="selection-hint" class="hint"></small>
         </label>
       </section>
 
       <nav class="tabs">
-        <button class="tab-button is-active" data-tab="tab-portfolio" type="button">
-          Portfolio 因子歸因層級
-        </button>
-        <button class="tab-button" data-tab="tab-stock" type="button">
-          個股因子歸因層級
-        </button>
-        <button class="tab-button" data-tab="tab-factor" type="button">
-          因子統計
-        </button>
+        <button class="tab-button is-active" data-tab="tab-compare" type="button">多基金比較</button>
+        <button class="tab-button" data-tab="tab-subfactor" type="button">子因子報酬比較</button>
+        <button class="tab-button" data-tab="tab-factor-table" type="button">因子報酬表</button>
+        <button class="tab-button" data-tab="tab-stock" type="button">個股歸因</button>
       </nav>
 
       <main>
-        <section id="tab-portfolio" class="tab-panel is-active">
-          <h2>Portfolio 因子歸因層級</h2>
-          <div id="portfolio-metrics" class="metric-grid"></div>
+        <section id="tab-compare" class="tab-panel is-active">
+          <h2>當月重點指標</h2>
+          <p class="panel-note">Active Return / IR 皆相對於「台股全市場動態市值 Benchmark（上市+上櫃）」。</p>
+          <div id="metric-grid" class="metric-grid"></div>
 
           <div class="chart-grid two-col">
             <article class="card">
-              <h3>累積報酬率走勢 (Portfolio vs Benchmark)</h3>
-              <div id="chart-cum-returns" class="chart"></div>
+              <h3>累積報酬比較（Portfolio）</h3>
+              <div id="chart-cum-port" class="chart"></div>
             </article>
             <article class="card">
-              <h3>Active Return 走勢</h3>
-              <div id="chart-active-return" class="chart"></div>
+              <h3>累積主動報酬比較（Active vs 全市場動態市值 Benchmark）</h3>
+              <div id="chart-cum-active" class="chart"></div>
             </article>
           </div>
 
           <div class="chart-grid two-col">
             <article class="card">
-              <h3>群組報酬拆解 (產業 / 風格 / 殘差)</h3>
+              <h3>當月群組報酬比較（產業 / 風格 / 殘差）</h3>
               <div id="chart-group-return" class="chart"></div>
             </article>
             <article class="card">
-              <h3>群組變異數拆解 (產業 / 風格 / 殘差)</h3>
+              <h3>當月群組風險比較（產業 / 風格 / 殘差）</h3>
               <div id="chart-group-variance" class="chart"></div>
             </article>
           </div>
 
-          <div class="chart-grid three-col">
-            <article class="card">
-              <h3>產業子因子報酬拆解</h3>
-              <div id="chart-industry-return" class="chart tall"></div>
-            </article>
-            <article class="card">
-              <h3>產業子因子變異數拆解</h3>
-              <div id="chart-industry-variance" class="chart tall"></div>
-            </article>
-            <article class="card">
-              <h3>產業子因子權重</h3>
-              <div id="chart-industry-weight" class="chart tall"></div>
-            </article>
-          </div>
+          <h2>群組層級趨勢</h2>
+          <section class="controls controls-compact">
+            <label class="control">
+              <span>Mode</span>
+              <select id="factor-trend-mode-select">
+                <option value="portfolio" selected>Portfolio</option>
+                <option value="active">Active (Portfolio - Benchmark)</option>
+                <option value="benchmark">Benchmark</option>
+              </select>
+            </label>
+            <label class="control">
+              <span>Fund</span>
+              <select id="factor-trend-fund-select"></select>
+            </label>
+          </section>
 
-          <div class="chart-grid three-col">
+          <div class="chart-grid two-col">
             <article class="card">
-              <h3>風格子因子報酬拆解</h3>
-              <div id="chart-style-return" class="chart tall"></div>
+              <h3>群組報酬貢獻趨勢（單一基金：產業/風格/殘差）</h3>
+              <div id="chart-factor-trend-return" class="chart"></div>
             </article>
             <article class="card">
-              <h3>風格子因子變異數拆解</h3>
-              <div id="chart-style-variance" class="chart tall"></div>
-            </article>
-            <article class="card">
-              <h3>風格子因子權重 (Σw×exposure)</h3>
-              <div id="chart-style-weight" class="chart tall"></div>
+              <h3>群組風險貢獻趨勢（單一基金：產業/風格/殘差）</h3>
+              <div id="chart-factor-trend-risk" class="chart"></div>
             </article>
           </div>
         </section>
 
+        <section id="tab-subfactor" class="tab-panel">
+          <h2 id="subfactor-title">子因子報酬比較</h2>
+          <section class="controls controls-compact">
+            <label class="control">
+              <span>比較口徑</span>
+              <select id="subfactor-metric-select">
+                <option value="active" selected>Active（Portfolio - Benchmark）</option>
+                <option value="portfolio">Portfolio</option>
+                <option value="benchmark">Benchmark</option>
+              </select>
+            </label>
+            <label class="control">
+              <span>Top 因子數</span>
+              <select id="subfactor-topn-select">
+                <option value="10">10</option>
+                <option value="15" selected>15</option>
+                <option value="20">20</option>
+              </select>
+            </label>
+          </section>
+
+          <div class="chart-grid one-col">
+            <article class="card">
+              <h3>產業子因子報酬比較（基金對比）</h3>
+              <div id="chart-subfactor-industry" class="chart tall"></div>
+            </article>
+            <article class="card">
+              <h3>風格子因子報酬比較（基金對比）</h3>
+              <div id="chart-subfactor-style" class="chart tall"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="tab-factor-table" class="tab-panel">
+          <h2 id="factor-table-title">因子報酬表</h2>
+          <section class="controls controls-compact">
+            <label class="control">
+              <span>因子類型</span>
+              <select id="factor-table-group-select">
+                <option value="all" selected>全部</option>
+                <option value="industry">產業</option>
+                <option value="style">風格</option>
+              </select>
+            </label>
+            <label class="control">
+              <span>觀察因子</span>
+              <select id="factor-table-factor-select"></select>
+            </label>
+          </section>
+          <article class="card">
+            <h3>單一因子報酬趨勢（柱狀）</h3>
+            <div id="chart-factor-table-trend" class="chart"></div>
+          </article>
+          <article class="card">
+            <div id="factor-table-summary" class="panel-note"></div>
+            <div class="table-wrap">
+              <table class="factor-table">
+                <thead>
+                  <tr>
+                    <th>類型</th>
+                    <th>因子</th>
+                    <th>報酬</th>
+                    <th>方向</th>
+                  </tr>
+                </thead>
+                <tbody id="factor-table-body"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
         <section id="tab-stock" class="tab-panel">
-          <h2>個股因子歸因層級</h2>
+          <h2 id="stock-title">個股歸因</h2>
+          <section class="controls controls-compact">
+            <label class="control">
+              <span>基金</span>
+              <select id="stock-fund-select"></select>
+            </label>
+            <label class="control">
+              <span>個股（下拉選單）</span>
+              <select id="stock-select"></select>
+            </label>
+          </section>
           <div id="stock-metrics" class="metric-grid"></div>
 
           <div class="chart-grid two-col">
             <article class="card">
-              <h3>個股群組報酬拆解 (產業 / 風格 / 殘差)</h3>
+              <h3>個股群組報酬貢獻（產業 / 風格 / 殘差）</h3>
               <div id="chart-stock-group-return" class="chart"></div>
             </article>
             <article class="card">
-              <h3>個股群組變異數拆解 (產業 / 風格 / 殘差)</h3>
+              <h3>個股群組風險貢獻（產業 / 風格 / 殘差）</h3>
               <div id="chart-stock-group-variance" class="chart"></div>
             </article>
           </div>
 
           <div class="chart-grid three-col">
             <article class="card">
-              <h3>產業子因子曝險</h3>
-              <div id="chart-stock-industry-exposure" class="chart tall"></div>
+              <h3>產業子因子報酬貢獻</h3>
+              <div id="chart-stock-industry-return" class="chart"></div>
             </article>
             <article class="card">
-              <h3>產業子因子報酬拆解</h3>
-              <div id="chart-stock-industry-return" class="chart tall"></div>
+              <h3>產業子因子風險貢獻</h3>
+              <div id="chart-stock-industry-variance" class="chart"></div>
             </article>
             <article class="card">
-              <h3>產業子因子變異數拆解</h3>
-              <div id="chart-stock-industry-variance" class="chart tall"></div>
+              <h3>產業子因子加權曝險</h3>
+              <div id="chart-stock-industry-weight" class="chart"></div>
             </article>
           </div>
 
           <div class="chart-grid three-col">
             <article class="card">
-              <h3>風格子因子曝險</h3>
-              <div id="chart-stock-style-exposure" class="chart tall"></div>
-            </article>
-            <article class="card">
-              <h3>風格子因子報酬拆解</h3>
+              <h3>風格子因子報酬貢獻</h3>
               <div id="chart-stock-style-return" class="chart tall"></div>
             </article>
             <article class="card">
-              <h3>風格子因子變異數拆解</h3>
+              <h3>風格子因子風險貢獻</h3>
               <div id="chart-stock-style-variance" class="chart tall"></div>
             </article>
-          </div>
-
-          <article class="card">
-            <h3>個股在所有因子中的曝險</h3>
-            <div id="chart-stock-all-exposure" class="chart tall"></div>
-          </article>
-        </section>
-
-        <section id="tab-factor" class="tab-panel">
-          <h2>因子統計</h2>
-          <div class="chart-grid two-col">
             <article class="card">
-              <h3>選定月份因子報酬橫截面</h3>
-              <div id="chart-factor-cross" class="chart tall"></div>
+              <h3>風格子因子加權曝險</h3>
+              <div id="chart-stock-style-weight" class="chart tall"></div>
             </article>
           </div>
         </section>

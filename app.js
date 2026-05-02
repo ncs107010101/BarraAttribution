@@ -1,11 +1,38 @@
 const state = {
   payload: null,
   month: null,
+  selectedFunds: [],
+  maxSelectableFunds: 5,
+  pointsByFundMonth: {},
+  factorTableFactor: null,
+  factorTrendFund: null,
+  stockFund: null,
   stock: null,
 };
 
 const monthSelect = document.getElementById("month-select");
+const fundSelect = document.getElementById("fund-select");
+const selectionHint = document.getElementById("selection-hint");
+const benchmarkNote = document.getElementById("benchmark-note");
+
+const subfactorMetricSelect = document.getElementById("subfactor-metric-select");
+const subfactorTopnSelect = document.getElementById("subfactor-topn-select");
+const subfactorTitle = document.getElementById("subfactor-title");
+
+const factorTableGroupSelect = document.getElementById("factor-table-group-select");
+const factorTableFactorSelect = document.getElementById("factor-table-factor-select");
+const factorTableTitle = document.getElementById("factor-table-title");
+const factorTableSummary = document.getElementById("factor-table-summary");
+const factorTableBody = document.getElementById("factor-table-body");
+
+const factorTrendModeSelect = document.getElementById("factor-trend-mode-select");
+const factorTrendFundSelect = document.getElementById("factor-trend-fund-select");
+
+const stockFundSelect = document.getElementById("stock-fund-select");
 const stockSelect = document.getElementById("stock-select");
+const stockTitle = document.getElementById("stock-title");
+
+const palette = ["#0f766e", "#ea580c", "#2563eb", "#dc2626", "#7c3aed"];
 
 const COLOR = {
   portfolio: "#0f766e",
@@ -26,7 +53,7 @@ const BASE_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(255,255,255,0.9)",
   margin: { l: 62, r: 22, t: 30, b: 66 },
-  legend: { orientation: "h", y: 1.11 },
+  legend: { orientation: "h", y: 1.12 },
   font: { family: "Noto Sans TC, Segoe UI, sans-serif", size: 12 },
 };
 
@@ -38,53 +65,867 @@ function mergeLayout(extra) {
   };
 }
 
-function isNearZero(value, eps = 1e-10) {
-  return Math.abs(Number(value || 0)) <= eps;
-}
-
-function allNearZero(values, eps = 1e-10) {
-  return (values || []).every((v) => isNearZero(v, eps));
+function toNum(value) {
+  if (value === null || value === undefined) return null;
+  const x = Number(value);
+  return Number.isFinite(x) ? x : null;
 }
 
 function fmtPct(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
-  return `${(Number(value) * 100).toFixed(2)}%`;
+  const x = toNum(value);
+  if (x === null) return "N/A";
+  return `${(x * 100).toFixed(2)}%`;
 }
 
-function fmtNum(value, digits = 4) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "N/A";
-  return Number(value).toFixed(digits);
+function fmtNum(value, digits = 3) {
+  const x = toNum(value);
+  if (x === null) return "N/A";
+  return x.toFixed(digits);
+}
+
+function fmtPctSigned(value, digits = 4) {
+  const x = toNum(value);
+  if (x === null) return "N/A";
+  const sign = x > 0 ? "+" : "";
+  return `${sign}${(x * 100).toFixed(digits)}%`;
 }
 
 function valueClass(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return "";
-  return value >= 0 ? "pos" : "neg";
+  const x = toNum(value);
+  if (x === null) return "";
+  return x >= 0 ? "pos" : "neg";
 }
 
-function factorLabel(factor) {
-  return state.payload?.meta?.factorLabels?.[factor] || factor;
+function setHint(message) {
+  selectionHint.textContent = message;
 }
 
-function prettyFactorList(factors) {
-  return (factors || []).map((f) => factorLabel(f));
+function plot(id, traces, layout) {
+  Plotly.newPlot(id, traces, mergeLayout(layout), PLOT_CONFIG);
 }
 
-function sortHorizontalByPrimary(labels, primary, secondary = null) {
-  const rows = labels.map((label, i) => ({
-    label,
-    primary: primary[i],
-    secondary: secondary ? secondary[i] : null,
-  }));
-  rows.sort((a, b) => {
-    const av = Number.isFinite(Number(a.primary)) ? Number(a.primary) : -Infinity;
-    const bv = Number.isFinite(Number(b.primary)) ? Number(b.primary) : -Infinity;
-    return bv - av;
+function plotEmpty(id, message = "無資料") {
+  plot(id, [], {
+    xaxis: { visible: false },
+    yaxis: { visible: false },
+    annotations: [
+      {
+        x: 0.5,
+        y: 0.5,
+        xref: "paper",
+        yref: "paper",
+        text: message,
+        showarrow: false,
+        font: { size: 13, color: "#64748b" },
+      },
+    ],
   });
-  return {
-    labels: rows.map((r) => r.label),
-    primary: rows.map((r) => r.primary),
-    secondary: rows.map((r) => r.secondary),
+}
+
+function fundMeta(code) {
+  return state.payload.meta.funds.find((f) => f.fund_code === code) || { fund_name: code };
+}
+
+function fundLabel(code) {
+  const meta = fundMeta(code);
+  return `${code} ${meta.fund_name}`;
+}
+
+function factorLabel(name) {
+  return state.payload.meta.factorLabels?.[name] || name;
+}
+
+function getFund(code) {
+  return state.payload.funds[code] || null;
+}
+
+function getFundSeries(code) {
+  return getFund(code)?.series || [];
+}
+
+function getPoint(code, month) {
+  return state.pointsByFundMonth[code]?.[month] || null;
+}
+
+function getFactorBlock(code, month) {
+  return getFund(code)?.factorByMonth?.[month] || null;
+}
+
+function getStockMonthData(code, month) {
+  return getFund(code)?.stocksByMonth?.[month] || null;
+}
+
+function getStockRecord(code, month, stockId) {
+  return getStockMonthData(code, month)?.records?.[stockId] || null;
+}
+
+function initDataMaps() {
+  const map = {};
+  Object.entries(state.payload.funds).forEach(([code, fundObj]) => {
+    map[code] = {};
+    (fundObj.series || []).forEach((row) => {
+      map[code][row.date] = row;
+    });
+  });
+  state.pointsByFundMonth = map;
+}
+
+function syncSelectedFundsInDom() {
+  const selected = new Set(state.selectedFunds);
+  [...fundSelect.options].forEach((opt) => {
+    opt.selected = selected.has(opt.value);
+  });
+}
+
+function enforceFundSelectionLimit(nextValues) {
+  if (nextValues.length <= state.maxSelectableFunds) return nextValues;
+
+  const kept = [...state.selectedFunds];
+  for (const value of nextValues) {
+    if (!kept.includes(value) && kept.length < state.maxSelectableFunds) {
+      kept.push(value);
+    }
+  }
+  return kept.slice(0, state.maxSelectableFunds);
+}
+
+function updateStockFundOptions() {
+  const fundCodes = state.selectedFunds.length
+    ? state.selectedFunds
+    : (state.payload.meta.funds || []).map((f) => f.fund_code);
+
+  stockFundSelect.innerHTML = fundCodes
+    .map((code) => `<option value="${code}">${fundLabel(code)}</option>`)
+    .join("");
+
+  if (!fundCodes.length) {
+    state.stockFund = null;
+    return;
+  }
+
+  if (!state.stockFund || !fundCodes.includes(state.stockFund)) {
+    state.stockFund = fundCodes[0];
+  }
+  stockFundSelect.value = state.stockFund;
+}
+
+function updateStockOptions() {
+  const monthData = state.stockFund ? getStockMonthData(state.stockFund, state.month) : null;
+  const assets = monthData?.assets || [];
+
+  if (!assets.length) {
+    stockSelect.innerHTML = `<option value="">無持股資料</option>`;
+    stockSelect.disabled = true;
+    state.stock = null;
+    return;
+  }
+
+  stockSelect.disabled = false;
+  stockSelect.innerHTML = assets.map((a) => `<option value="${a}">${a}</option>`).join("");
+
+  if (!state.stock || !assets.includes(state.stock)) {
+    state.stock = assets[0];
+  }
+  stockSelect.value = state.stock;
+}
+
+function renderBenchmarkNote() {
+  const text = state.payload.meta.benchmarkDefinition || "";
+  benchmarkNote.textContent = text ? `Active Return / IR 的 Benchmark：${text}` : "";
+}
+
+function renderMetricCards() {
+  const container = document.getElementById("metric-grid");
+  if (!state.selectedFunds.length) {
+    container.innerHTML = `<article class="metric-card"><div class="label">請先選擇基金</div></article>`;
+    return;
+  }
+
+  const cards = state.selectedFunds
+    .map((code) => {
+      const p = getPoint(code, state.month);
+      if (!p) return "";
+      return `
+        <article class="metric-card">
+          <div class="label">${fundLabel(code)}</div>
+          <div class="value ${valueClass(p.returnPort)}">${fmtPct(p.returnPort)}</div>
+          <div class="metric-sub">Active Return: <strong>${fmtPct(p.returnActive)}</strong></div>
+          <div class="metric-sub">Tracking Error: <strong>${fmtPct(p.trackingError)}</strong></div>
+          <div class="metric-sub">Sharpe / IR: <strong>${fmtNum(p.sharpePort)} / ${fmtNum(p.information)}</strong></div>
+        </article>
+      `;
+    })
+    .join("");
+
+  container.innerHTML = cards || `<article class="metric-card"><div class="label">該月份無資料</div></article>`;
+}
+
+function renderCumPortChart() {
+  if (!state.selectedFunds.length) {
+    plotEmpty("chart-cum-port");
+    return;
+  }
+
+  const traces = state.selectedFunds.map((code, idx) => {
+    const series = getFundSeries(code);
+    return {
+      x: series.map((d) => d.date),
+      y: series.map((d) => d.cumPort),
+      mode: "lines+markers",
+      name: fundLabel(code),
+      line: { width: 2.4, color: palette[idx % palette.length] },
+    };
+  });
+
+  plot("chart-cum-port", traces, {
+    yaxis: { tickformat: ".1%", title: "Cumulative Return" },
+    xaxis: { title: "Month" },
+  });
+}
+
+function renderCumActiveChart() {
+  if (!state.selectedFunds.length) {
+    plotEmpty("chart-cum-active");
+    return;
+  }
+
+  const traces = state.selectedFunds.map((code, idx) => {
+    const series = getFundSeries(code);
+    return {
+      x: series.map((d) => d.date),
+      y: series.map((d) => d.cumActive),
+      mode: "lines+markers",
+      name: fundLabel(code),
+      line: { width: 2.4, color: palette[idx % palette.length] },
+    };
+  });
+
+  plot("chart-cum-active", traces, {
+    yaxis: { tickformat: ".1%", title: "Cumulative Active Return" },
+    xaxis: { title: "Month" },
+  });
+}
+
+function renderGroupCompareChart(chartId, groupKey) {
+  if (!state.selectedFunds.length) {
+    plotEmpty(chartId);
+    return;
+  }
+
+  const x = state.selectedFunds;
+  plot(
+    chartId,
+    [
+      {
+        x,
+        y: x.map((f) => getPoint(f, state.month)?.[groupKey]?.industry ?? null),
+        type: "bar",
+        name: "Industry",
+        marker: { color: COLOR.industry },
+      },
+      {
+        x,
+        y: x.map((f) => getPoint(f, state.month)?.[groupKey]?.style ?? null),
+        type: "bar",
+        name: "Style",
+        marker: { color: COLOR.style },
+      },
+      {
+        x,
+        y: x.map((f) => getPoint(f, state.month)?.[groupKey]?.residual ?? null),
+        type: "bar",
+        name: "Residual",
+        marker: { color: COLOR.residual },
+      },
+    ],
+    {
+      barmode: "group",
+      yaxis: {
+        tickformat: ".2%",
+        title: groupKey === "groupReturn" ? "Return Contribution" : "Variance Contribution",
+      },
+      xaxis: { title: "Fund" },
+    }
+  );
+}
+
+function sumFinite(values) {
+  let hasValue = false;
+  let total = 0;
+  for (const v of values || []) {
+    const x = toNum(v);
+    if (x === null) continue;
+    hasValue = true;
+    total += x;
+  }
+  return hasValue ? total : null;
+}
+
+function syncFactorTrendFundOptions() {
+  if (!factorTrendFundSelect) return;
+
+  const codes = state.selectedFunds.length
+    ? [...state.selectedFunds]
+    : (state.payload.meta.funds || []).map((f) => f.fund_code);
+
+  if (!codes.length) {
+    factorTrendFundSelect.innerHTML = `<option value="">(no fund)</option>`;
+    factorTrendFundSelect.disabled = true;
+    state.factorTrendFund = null;
+    return;
+  }
+
+  factorTrendFundSelect.disabled = false;
+  const prev = state.factorTrendFund || factorTrendFundSelect.value;
+  factorTrendFundSelect.innerHTML = codes
+    .map((code) => `<option value="${code}">${fundLabel(code)}</option>`)
+    .join("");
+
+  state.factorTrendFund = codes.includes(prev) ? prev : codes[0];
+  factorTrendFundSelect.value = state.factorTrendFund;
+}
+
+function groupContributionAtMonth(code, month, mode, kind) {
+  const point = getPoint(code, month);
+  const block = getFactorBlock(code, month);
+  if (!point || !block) {
+    return { industry: null, style: null, residual: null };
+  }
+
+  const portIndustry = sumFinite(block?.industry?.[kind === "risk" ? "pv" : "pr"]);
+  const portStyle = sumFinite(block?.style?.[kind === "risk" ? "pv" : "pr"]);
+  const benchIndustry = sumFinite(block?.industry?.[kind === "risk" ? "bv" : "br"]);
+  const benchStyle = sumFinite(block?.style?.[kind === "risk" ? "bv" : "br"]);
+
+  const totalPort = toNum(kind === "risk" ? point.variancePort : point.returnPort);
+  const totalBench = toNum(kind === "risk" ? point.varianceBench : point.returnBench);
+
+  const portResidual =
+    totalPort === null || portIndustry === null || portStyle === null
+      ? null
+      : totalPort - portIndustry - portStyle;
+  const benchResidual =
+    totalBench === null || benchIndustry === null || benchStyle === null
+      ? null
+      : totalBench - benchIndustry - benchStyle;
+
+  const pick = (p, b) => {
+    if (mode === "portfolio") return p;
+    if (mode === "benchmark") return b;
+    if (p === null && b === null) return null;
+    return (p || 0) - (b || 0);
   };
+
+  return {
+    industry: pick(portIndustry, benchIndustry),
+    style: pick(portStyle, benchStyle),
+    residual: pick(portResidual, benchResidual),
+  };
+}
+
+function renderFactorTrendCharts() {
+  if (!factorTrendModeSelect || !factorTrendFundSelect) return;
+
+  syncFactorTrendFundOptions();
+
+  if (!state.factorTrendFund) {
+    plotEmpty("chart-factor-trend-return");
+    plotEmpty("chart-factor-trend-risk");
+    return;
+  }
+
+  const code = state.factorTrendFund;
+  const series = getFundSeries(code);
+  if (!series.length) {
+    plotEmpty("chart-factor-trend-return");
+    plotEmpty("chart-factor-trend-risk");
+    return;
+  }
+
+  const mode = factorTrendModeSelect.value || "portfolio";
+  const modeLabel = mode === "active" ? "Active" : mode === "benchmark" ? "Benchmark" : "Portfolio";
+  const groups = [
+    { key: "industry", name: "Industry", color: COLOR.industry },
+    { key: "style", name: "Style", color: COLOR.style },
+    { key: "residual", name: "Residual", color: COLOR.residual },
+  ];
+
+  const returnTraces = groups.map((group) => ({
+    x: series.map((d) => d.date),
+    y: series.map((d) => groupContributionAtMonth(code, d.date, mode, "return")[group.key]),
+    mode: "lines+markers",
+    name: group.name,
+    line: { width: 2.2, color: group.color },
+    marker: { size: 5 },
+  }));
+
+  const riskTraces = groups.map((group) => ({
+    x: series.map((d) => d.date),
+    y: series.map((d) => groupContributionAtMonth(code, d.date, mode, "risk")[group.key]),
+    mode: "lines+markers",
+    name: group.name,
+    line: { width: 2.2, color: group.color },
+    marker: { size: 5 },
+  }));
+
+  const titleSuffix = `${modeLabel} - ${fundLabel(code)}`;
+
+  plot("chart-factor-trend-return", returnTraces, {
+    yaxis: { tickformat: ".2%", title: "Return Contribution" },
+    xaxis: { title: "Month" },
+    title: titleSuffix,
+  });
+
+  plot("chart-factor-trend-risk", riskTraces, {
+    yaxis: { tickformat: ".2%", title: "Variance Contribution" },
+    xaxis: { title: "Month" },
+    title: titleSuffix,
+  });
+}
+
+function renderCompareTab() {
+  renderMetricCards();
+  renderCumPortChart();
+  renderCumActiveChart();
+  renderGroupCompareChart("chart-group-return", "groupReturn");
+  renderGroupCompareChart("chart-group-variance", "groupVariance");
+  renderFactorTrendCharts();
+}
+
+function getSubfactorMetricValue(block, group, idx, metric) {
+  const p = toNum(block?.[group]?.pr?.[idx]);
+  const b = toNum(block?.[group]?.br?.[idx]);
+
+  if (metric === "portfolio") return p;
+  if (metric === "benchmark") return b;
+  if (p === null && b === null) return null;
+  return (p || 0) - (b || 0);
+}
+
+function buildSubfactorRows(groupName, factorList, metric) {
+  return factorList
+    .map((factor, idx) => {
+      const valuesByFund = {};
+      for (const code of state.selectedFunds) {
+        const block = getFactorBlock(code, state.month);
+        valuesByFund[code] = getSubfactorMetricValue(block, groupName, idx, metric);
+      }
+
+      const score = Math.max(
+        ...state.selectedFunds.map((code) => Math.abs(toNum(valuesByFund[code]) || 0))
+      );
+
+      return {
+        factor,
+        label: factorLabel(factor),
+        valuesByFund,
+        score,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+function renderSubfactorCompareChart(chartId, groupName, factorList) {
+  if (!state.selectedFunds.length) {
+    plotEmpty(chartId);
+    return;
+  }
+
+  const metric = subfactorMetricSelect.value;
+  const topN = Number(subfactorTopnSelect.value || 15);
+  const rows = buildSubfactorRows(groupName, factorList, metric).slice(0, topN);
+
+  if (!rows.length) {
+    plotEmpty(chartId);
+    return;
+  }
+
+  const yLabels = rows.map((r) => r.label);
+  const traces = state.selectedFunds.map((code, idx) => ({
+    y: yLabels,
+    x: rows.map((r) => r.valuesByFund[code]),
+    type: "bar",
+    orientation: "h",
+    name: fundLabel(code),
+    marker: { color: palette[idx % palette.length] },
+  }));
+
+  plot(chartId, traces, {
+    barmode: "group",
+    margin: { l: 230, r: 16, t: 30, b: 70 },
+    xaxis: { title: "Return Contribution", tickformat: ".2%" },
+    yaxis: { title: "Sub-Factor", autorange: "reversed", automargin: true },
+  });
+}
+
+function renderSubfactorTab() {
+  const selectedCount = state.selectedFunds.length;
+  subfactorTitle.textContent = `子因子報酬比較 - ${state.month}（${selectedCount} 檔基金）`;
+
+  renderSubfactorCompareChart(
+    "chart-subfactor-industry",
+    "industry",
+    state.payload.meta.industryFactors || []
+  );
+  renderSubfactorCompareChart(
+    "chart-subfactor-style",
+    "style",
+    state.payload.meta.styleFactors || []
+  );
+}
+
+function factorDirectionTag(value) {
+  const x = toNum(value);
+  if (x === null) {
+    return { text: "N/A", cls: "dir-flat" };
+  }
+  if (x > 1.0e-12) {
+    return { text: "正向 ▲", cls: "dir-up" };
+  }
+  if (x < -1.0e-12) {
+    return { text: "負向 ▼", cls: "dir-down" };
+  }
+  return { text: "中性 －", cls: "dir-flat" };
+}
+
+function factorTableFactorsByGroup(group) {
+  const industrySet = new Set(state.payload.meta.industryFactors || []);
+  const styleSet = new Set(state.payload.meta.styleFactors || []);
+  if (group === "industry") return [...industrySet];
+  if (group === "style") return [...styleSet];
+  return [...industrySet, ...styleSet];
+}
+
+function syncFactorTableFactorOptions(rows) {
+  if (!factorTableFactorSelect) return rows[0]?.factor || null;
+
+  if (!rows.length) {
+    factorTableFactorSelect.innerHTML = `<option value="">(no factor)</option>`;
+    factorTableFactorSelect.disabled = true;
+    state.factorTableFactor = null;
+    return null;
+  }
+
+  factorTableFactorSelect.disabled = false;
+  const prev = state.factorTableFactor || factorTableFactorSelect.value;
+  factorTableFactorSelect.innerHTML = rows
+    .map((r) => `<option value="${r.factor}">${r.label}</option>`)
+    .join("");
+
+  state.factorTableFactor = rows.some((r) => r.factor === prev) ? prev : rows[0].factor;
+  factorTableFactorSelect.value = state.factorTableFactor;
+  return state.factorTableFactor;
+}
+
+function renderFactorTableTrendChart(factor) {
+  if (!factor) {
+    plotEmpty("chart-factor-table-trend", "請先選擇因子");
+    return;
+  }
+
+  const dates = state.payload.meta.dates || [];
+  const y = dates.map((d) => toNum(state.payload.factorReturnsByMonth?.[d]?.[factor]));
+  const colors = y.map((v) => {
+    if (v === null) return "#cbd5e1";
+    if (v > 0) return "#dc2626";
+    if (v < 0) return "#16a34a";
+    return "#94a3b8";
+  });
+
+  plot(
+    "chart-factor-table-trend",
+    [
+      {
+        x: dates,
+        y,
+        type: "bar",
+        marker: { color: colors },
+        hovertemplate: "%{x}<br>%{y:.4%}<extra></extra>",
+      },
+    ],
+    {
+      yaxis: { tickformat: ".2%", title: "Factor Return" },
+      xaxis: { title: "Month" },
+      title: factorLabel(factor),
+      shapes: [
+        {
+          type: "line",
+          xref: "paper",
+          x0: 0,
+          x1: 1,
+          y0: 0,
+          y1: 0,
+          line: { color: "#334155", width: 1, dash: "dot" },
+        },
+      ],
+      showlegend: false,
+    }
+  );
+}
+
+function renderFactorTableTab() {
+  factorTableTitle.textContent = `因子報酬表 - ${state.month}`;
+
+  const monthMap = state.payload.factorReturnsByMonth?.[state.month];
+  if (!monthMap) {
+    factorTableSummary.textContent = "該月份無因子報酬資料。";
+    factorTableBody.innerHTML = `<tr><td colspan="4">無資料</td></tr>`;
+    syncFactorTableFactorOptions([]);
+    plotEmpty("chart-factor-table-trend");
+    return;
+  }
+
+  const group = factorTableGroupSelect.value || "all";
+  const factors = factorTableFactorsByGroup(group);
+  const styleSet = new Set(state.payload.meta.styleFactors || []);
+
+  const rows = factors
+    .map((factor) => {
+      const value = toNum(monthMap[factor]);
+      const direction = factorDirectionTag(value);
+      const type = styleSet.has(factor) ? "風格" : "產業";
+      return {
+        factor,
+        label: factorLabel(factor),
+        type,
+        value,
+        direction,
+      };
+    })
+    .sort((a, b) => Math.abs(b.value || 0) - Math.abs(a.value || 0));
+
+  const selectedFactor = syncFactorTableFactorOptions(rows);
+
+  if (!rows.length) {
+    factorTableSummary.textContent = "該條件下無可用因子。";
+    factorTableBody.innerHTML = `<tr><td colspan="4">無資料</td></tr>`;
+    plotEmpty("chart-factor-table-trend");
+    return;
+  }
+
+  const upCount = rows.filter((r) => (r.value || 0) > 1.0e-12).length;
+  const downCount = rows.filter((r) => (r.value || 0) < -1.0e-12).length;
+  const flatCount = rows.length - upCount - downCount;
+  factorTableSummary.textContent = `共 ${rows.length} 個因子，正向 ${upCount}、負向 ${downCount}、中性 ${flatCount}。`;
+
+  factorTableBody.innerHTML = rows
+    .map(
+      (r) => `
+      <tr>
+        <td>${r.type}</td>
+        <td>${r.label}</td>
+        <td>${fmtPctSigned(r.value)}</td>
+        <td><span class="${r.direction.cls}">${r.direction.text}</span></td>
+      </tr>
+    `
+    )
+    .join("");
+
+  renderFactorTableTrendChart(selectedFactor);
+}
+
+function renderCards(containerId, cards) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = cards
+    .map((card) => {
+      const details = (card.details || [])
+        .map((d) => `<div class="metric-sub">${d.label}: <strong>${d.value}</strong></div>`)
+        .join("");
+      return `
+        <article class="metric-card">
+          <div class="label">${card.label}</div>
+          <div class="value ${valueClass(card.rawValue)}">${card.value}</div>
+          ${details}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderVerticalSingle(chartId, label, value, title, color, tickformat = ".2%") {
+  plot(
+    chartId,
+    [
+      {
+        x: [label],
+        y: [value],
+        type: "bar",
+        marker: { color },
+      },
+    ],
+    {
+      yaxis: { tickformat, title },
+      xaxis: { title: "Factor" },
+    }
+  );
+}
+
+function renderHorizontalSingle(chartId, rows, key, xTitle, color, tickformat = ".2%") {
+  if (!rows.length) {
+    plotEmpty(chartId);
+    return;
+  }
+
+  plot(
+    chartId,
+    [
+      {
+        y: rows.map((r) => r.label),
+        x: rows.map((r) => r[key]),
+        type: "bar",
+        orientation: "h",
+        marker: { color },
+      },
+    ],
+    {
+      margin: { l: 150, r: 18, t: 26, b: 65 },
+      xaxis: { title: xTitle, tickformat },
+      yaxis: { automargin: true, autorange: "reversed" },
+    }
+  );
+}
+
+function renderStockTab() {
+  const stockChartIds = [
+    "chart-stock-group-return",
+    "chart-stock-group-variance",
+    "chart-stock-industry-return",
+    "chart-stock-industry-variance",
+    "chart-stock-industry-weight",
+    "chart-stock-style-return",
+    "chart-stock-style-variance",
+    "chart-stock-style-weight",
+  ];
+
+  if (!state.stockFund) {
+    stockTitle.textContent = "個股歸因";
+    renderCards("stock-metrics", [{ label: "請先選擇基金", value: "-", rawValue: null }]);
+    stockChartIds.forEach((id) => plotEmpty(id));
+    return;
+  }
+
+  stockTitle.textContent = `個股歸因 - ${fundLabel(state.stockFund)} (${state.month})`;
+
+  const monthData = getStockMonthData(state.stockFund, state.month);
+  if (!monthData?.assets?.length || !state.stock) {
+    renderCards("stock-metrics", [{ label: "該月無持股資料", value: "-", rawValue: null }]);
+    stockChartIds.forEach((id) => plotEmpty(id));
+    return;
+  }
+
+  const record = getStockRecord(state.stockFund, state.month, state.stock);
+  if (!record) {
+    renderCards("stock-metrics", [{ label: "無該個股資料", value: "-", rawValue: null }]);
+    stockChartIds.forEach((id) => plotEmpty(id));
+    return;
+  }
+
+  renderCards("stock-metrics", [
+    {
+      label: `${state.stock} 報酬率`,
+      value: fmtPct(record.ret),
+      rawValue: record.ret,
+      details: [{ label: "個股變異數", value: fmtPct(record.var) }],
+    },
+    {
+      label: "Portfolio 權重",
+      value: fmtPct(record.wPort),
+      rawValue: record.activeWeight,
+      details: [
+        { label: "Benchmark 權重", value: fmtPct(record.wBench) },
+        { label: "Active 權重", value: fmtPct(record.activeWeight) },
+      ],
+    },
+    {
+      label: "群組報酬（Industry）",
+      value: fmtPct(record.groupRet?.[0]),
+      rawValue: record.groupRet?.[0],
+      details: [
+        { label: "Style", value: fmtPct(record.groupRet?.[1]) },
+        { label: "Residual", value: fmtPct(record.groupRet?.[2]) },
+      ],
+    },
+    {
+      label: "群組風險（Industry）",
+      value: fmtPct(record.groupVar?.[0]),
+      rawValue: record.groupVar?.[0],
+      details: [
+        { label: "Style", value: fmtPct(record.groupVar?.[1]) },
+        { label: "Residual", value: fmtPct(record.groupVar?.[2]) },
+      ],
+    },
+  ]);
+
+  plot(
+    "chart-stock-group-return",
+    [
+      {
+        x: ["Industry", "Style", "Residual"],
+        y: [record.groupRet?.[0], record.groupRet?.[1], record.groupRet?.[2]],
+        type: "bar",
+        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
+      },
+    ],
+    { yaxis: { tickformat: ".2%", title: "Return Contribution" } }
+  );
+
+  plot(
+    "chart-stock-group-variance",
+    [
+      {
+        x: ["Industry", "Style", "Residual"],
+        y: [record.groupVar?.[0], record.groupVar?.[1], record.groupVar?.[2]],
+        type: "bar",
+        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
+      },
+    ],
+    { yaxis: { tickformat: ".2%", title: "Variance Contribution" } }
+  );
+
+  const industryLabel = factorLabel(record.industry?.factor || "Industry");
+  renderVerticalSingle(
+    "chart-stock-industry-return",
+    industryLabel,
+    record.industry?.r,
+    "Return Contribution",
+    COLOR.portfolio,
+    ".2%"
+  );
+  renderVerticalSingle(
+    "chart-stock-industry-variance",
+    industryLabel,
+    record.industry?.v,
+    "Variance Contribution",
+    COLOR.benchmark,
+    ".2%"
+  );
+  renderVerticalSingle(
+    "chart-stock-industry-weight",
+    industryLabel,
+    record.industry?.x,
+    "Weighted Exposure",
+    "#334155",
+    ",.4f"
+  );
+
+  const styleFactors = state.payload.meta.styleFactors || [];
+  const styleRows = styleFactors.map((factor, idx) => {
+    const row = record.style?.[idx] || [null, null, null, null];
+    return {
+      label: factorLabel(factor),
+      r: toNum(row[0]),
+      v: toNum(row[1]),
+      x: toNum(row[3]),
+    };
+  });
+
+  const byRet = [...styleRows].sort((a, b) => Math.abs(b.r || 0) - Math.abs(a.r || 0));
+  const byVar = [...styleRows].sort((a, b) => Math.abs(b.v || 0) - Math.abs(a.v || 0));
+  const byX = [...styleRows].sort((a, b) => Math.abs(b.x || 0) - Math.abs(a.x || 0));
+
+  renderHorizontalSingle("chart-stock-style-return", byRet, "r", "Return Contribution", COLOR.portfolio, ".2%");
+  renderHorizontalSingle("chart-stock-style-variance", byVar, "v", "Variance Contribution", COLOR.benchmark, ".2%");
+  renderHorizontalSingle("chart-stock-style-weight", byX, "x", "Weighted Exposure", "#334155", ",.4f");
 }
 
 function resizePlotsInActiveTab() {
@@ -105,550 +946,22 @@ function bindWindowResize() {
   let resizeTimer = null;
   window.addEventListener("resize", () => {
     if (resizeTimer) clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      scheduleResizeActiveTab();
-    }, 120);
+    resizeTimer = setTimeout(() => scheduleResizeActiveTab(), 120);
   });
-}
-
-function renderMetricCards(containerId, cards) {
-  const container = document.getElementById(containerId);
-  container.innerHTML = cards
-    .map((card) => {
-      const details = (card.details || [])
-        .map((d) => `<div class="metric-sub">${d.label}: <strong>${d.value}</strong></div>`)
-        .join("");
-      return `
-      <article class="metric-card">
-        <div class="label">${card.label}</div>
-        <div class="value ${valueClass(card.rawValue)}">${card.value}</div>
-        ${details}
-      </article>
-    `;
-    })
-    .join("");
-}
-
-function plot(id, traces, layout) {
-  Plotly.newPlot(id, traces, mergeLayout(layout), PLOT_CONFIG);
-}
-
-function getPortfolioDataByMonth(month) {
-  return {
-    metrics: state.payload.portfolio.metricsByMonth[month],
-    group: state.payload.portfolio.groupByMonth[month],
-    industryRows: state.payload.portfolio.industryFactorsByMonth[month] || [],
-    styleRows: state.payload.portfolio.styleFactorsByMonth[month] || [],
-  };
-}
-
-function updateStockOptions() {
-  const monthData = state.payload.stocks.byMonth[state.month];
-  const assets = monthData?.assets || [];
-  stockSelect.innerHTML = assets.map((a) => `<option value="${a}">${a}</option>`).join("");
-
-  if (!assets.length) {
-    state.stock = null;
-    return;
-  }
-
-  if (!assets.includes(state.stock)) state.stock = assets[0];
-  stockSelect.value = state.stock;
-}
-
-function zeroMarkerTraceVertical(categories, values) {
-  const x = [];
-  const y = [];
-  categories.forEach((c, i) => {
-    if (isNearZero(values[i])) {
-      x.push(c);
-      y.push(0);
-    }
-  });
-  if (!x.length) return null;
-  return {
-    type: "scatter",
-    mode: "markers",
-    x,
-    y,
-    showlegend: false,
-    marker: { color: COLOR.benchmark, size: 8, symbol: "diamond-open" },
-    hovertemplate: "Benchmark ≈ 0<extra></extra>",
-  };
-}
-
-function zeroMarkerTraceHorizontal(categories, values) {
-  const x = [];
-  const y = [];
-  categories.forEach((c, i) => {
-    if (isNearZero(values[i])) {
-      x.push(0);
-      y.push(c);
-    }
-  });
-  if (!x.length) return null;
-  return {
-    type: "scatter",
-    mode: "markers",
-    x,
-    y,
-    showlegend: false,
-    marker: { color: COLOR.benchmark, size: 7, symbol: "diamond-open" },
-    hovertemplate: "Benchmark ≈ 0<extra></extra>",
-  };
-}
-
-function nearZeroAnnotation(enabled) {
-  if (!enabled) return [];
-  return [
-    {
-      xref: "paper",
-      yref: "paper",
-      x: 1,
-      y: 1.15,
-      text: "Benchmark 在此圖接近 0",
-      showarrow: false,
-      font: { size: 11, color: COLOR.benchmark },
-    },
-  ];
-}
-
-function renderPortfolioMetrics(metrics, group) {
-  const activeVariance = metrics.trackingError != null ? metrics.trackingError ** 2 : null;
-  renderMetricCards("portfolio-metrics", [
-    {
-      label: "Return",
-      value: fmtPct(metrics.returnPort),
-      rawValue: metrics.returnPort,
-      details: [
-        { label: "Benchmark", value: fmtPct(metrics.returnBench) },
-        { label: "Active", value: fmtPct(metrics.returnActive) },
-      ],
-    },
-    {
-      label: "Variance",
-      value: fmtPct(metrics.variancePort),
-      rawValue: metrics.variancePort,
-      details: [
-        { label: "Benchmark", value: fmtPct(metrics.varianceBench) },
-        { label: "Active (TE^2)", value: fmtPct(activeVariance) },
-      ],
-    },
-    {
-      label: "Sharpe / IR",
-      value: fmtNum(metrics.sharpePort),
-      rawValue: metrics.sharpePort,
-      details: [
-        { label: "Benchmark Sharpe", value: fmtNum(metrics.sharpeBench) },
-        { label: "Active IR", value: fmtNum(metrics.information) },
-      ],
-    },
-    {
-      label: "Tracking Error",
-      value: fmtPct(metrics.trackingError),
-      rawValue: metrics.trackingError,
-      details: [
-        { label: "Benchmark", value: "-" },
-        { label: "Active", value: fmtPct(metrics.trackingError) },
-      ],
-    },
-  ]);
-}
-
-function renderPortfolioSeries() {
-  const series = state.payload.portfolio.series;
-  const dates = series.map((s) => s.date);
-
-  plot(
-    "chart-cum-returns",
-    [
-      {
-        x: dates,
-        y: series.map((s) => s.cumPort),
-        mode: "lines+markers",
-        name: "Portfolio",
-        line: { color: COLOR.portfolio, width: 2.5 },
-      },
-      {
-        x: dates,
-        y: series.map((s) => s.cumBench),
-        mode: "lines+markers",
-        name: "Benchmark",
-        line: { color: COLOR.benchmark, width: 2.5 },
-      },
-    ],
-    {
-      yaxis: { tickformat: ".1%", title: "Cumulative Return" },
-      xaxis: { title: "Month" },
-    }
-  );
-
-  plot(
-    "chart-active-return",
-    [
-      {
-        x: dates,
-        y: series.map((s) => s.returnActive),
-        type: "bar",
-        name: "Monthly Active Return",
-        marker: { color: COLOR.active, opacity: 0.72 },
-      },
-      {
-        x: dates,
-        y: series.map((s) => s.cumActive),
-        mode: "lines+markers",
-        name: "Cumulative Active Return",
-        yaxis: "y2",
-        line: { color: COLOR.residual, width: 2.2 },
-      },
-    ],
-    {
-      yaxis: { tickformat: ".1%", title: "Monthly Active Return" },
-      yaxis2: {
-        overlaying: "y",
-        side: "right",
-        tickformat: ".1%",
-        title: "Cumulative Active Return",
-      },
-      xaxis: { title: "Month" },
-    }
-  );
-}
-
-function renderGroupCharts(group) {
-  const hasCountry = !!(group?.return?.country && group?.variance?.country);
-  const keys = hasCountry
-    ? ["country", "industry", "style", "residual"]
-    : ["industry", "style", "residual"];
-  const labelMap = {
-    country: "\u570b\u5bb6",
-    industry: "\u7522\u696d",
-    style: "\u98a8\u683c",
-    residual: "\u6b98\u5dee",
-  };
-  const labels = keys.map((k) => labelMap[k] || k);
-  const portReturn = keys.map((k) => group?.return?.[k]?.portfolio ?? 0);
-  const benchReturn = keys.map((k) => group?.return?.[k]?.benchmark ?? 0);
-  const portVar = keys.map((k) => group?.variance?.[k]?.portfolio ?? 0);
-  const benchVar = keys.map((k) => group?.variance?.[k]?.benchmark ?? 0);
-
-  function groupedBars(id, yPort, yBench, title) {
-    const traces = [
-      {
-        x: labels,
-        y: yPort,
-        type: "bar",
-        name: "Portfolio",
-        marker: { color: COLOR.portfolio },
-      },
-      {
-        x: labels,
-        y: yBench,
-        type: "bar",
-        name: "Benchmark",
-        marker: { color: COLOR.benchmark },
-      },
-    ];
-    const zeroMarkers = zeroMarkerTraceVertical(labels, yBench);
-    if (zeroMarkers) traces.push(zeroMarkers);
-
-    plot(id, traces, {
-      barmode: "group",
-      yaxis: { title, tickformat: ".2%" },
-      annotations: nearZeroAnnotation(allNearZero(yBench)),
-    });
-  }
-
-  groupedBars("chart-group-return", portReturn, benchReturn, "Return");
-  groupedBars("chart-group-variance", portVar, benchVar, "Variance");
-}
-
-function renderFactorCompareCharts(rows, prefix, withBenchmark = true) {
-  const labels = prettyFactorList(rows.map((r) => r.factor));
-  const portReturn = rows.map((r) => r.portfolio.return);
-  const benchReturn = rows.map((r) => r.benchmark.return);
-  const portVar = rows.map((r) => r.portfolio.variance);
-  const benchVar = rows.map((r) => r.benchmark.variance);
-  const portWeight = rows.map((r) => r.portfolio.weight);
-  const benchWeight = rows.map((r) => r.benchmark.weight);
-
-  function hGroup(id, left, right, title, percent = true) {
-    const sorted = sortHorizontalByPrimary(labels, left, withBenchmark ? right : null);
-    const yLabels = sorted.labels;
-    const leftValues = sorted.primary;
-    const rightValues = withBenchmark ? sorted.secondary : [];
-    const traces = [
-      {
-        y: yLabels,
-        x: leftValues,
-        type: "bar",
-        orientation: "h",
-        name: "Portfolio",
-        marker: { color: COLOR.portfolio },
-      },
-    ];
-
-    if (withBenchmark) {
-      traces.push({
-        y: yLabels,
-        x: rightValues,
-        type: "bar",
-        orientation: "h",
-        name: "Benchmark",
-        marker: { color: COLOR.benchmark },
-      });
-      const zeroMarkers = zeroMarkerTraceHorizontal(yLabels, rightValues);
-      if (zeroMarkers) traces.push(zeroMarkers);
-    }
-
-    plot(id, traces, {
-      barmode: "group",
-      xaxis: { title, tickformat: percent ? ".2%" : ",.3f" },
-      yaxis: { automargin: true, autorange: "reversed" },
-      annotations: withBenchmark ? nearZeroAnnotation(allNearZero(rightValues)) : [],
-    });
-  }
-
-  hGroup(`chart-${prefix}-return`, portReturn, benchReturn, "Return Contribution");
-  hGroup(`chart-${prefix}-variance`, portVar, benchVar, "Variance Contribution");
-  hGroup(`chart-${prefix}-weight`, portWeight, benchWeight, "Weight / Exposure", false);
-}
-
-function renderPortfolioTab() {
-  const { metrics, group, industryRows, styleRows } = getPortfolioDataByMonth(state.month);
-  renderPortfolioMetrics(metrics, group);
-  renderPortfolioSeries();
-  renderGroupCharts(group);
-  renderFactorCompareCharts(industryRows, "industry", true);
-  renderFactorCompareCharts(styleRows, "style", false);
-}
-
-function renderStockMetrics(record) {
-  const activeWeight =
-    record.weightPort != null && record.weightBench != null
-      ? record.weightPort - record.weightBench
-      : null;
-
-  renderMetricCards("stock-metrics", [
-    {
-      label: "\u500b\u80a1\u5831\u916c\u7387",
-      value: fmtPct(record.return),
-      rawValue: record.return,
-      details: [{ label: "\u500b\u80a1\u8b8a\u7570\u6578", value: fmtPct(record.variance) }],
-    },
-    {
-      label: "Portfolio \u6b0a\u91cd",
-      value: fmtPct(record.weightPort),
-      rawValue: activeWeight,
-      details: [
-        { label: "Benchmark \u6b0a\u91cd", value: fmtPct(record.weightBench) },
-        { label: "Active \u6b0a\u91cd", value: fmtPct(activeWeight) },
-      ],
-    },
-    {
-      label: "\u7fa4\u7d44\u5831\u916c\u62c6\u89e3",
-      value: fmtPct(record.groupReturn.industry),
-      rawValue: record.groupReturn.industry,
-      details: [
-        { label: "\u98a8\u683c", value: fmtPct(record.groupReturn.style) },
-        { label: "\u6b98\u5dee", value: fmtPct(record.groupReturn.residual) },
-      ],
-    },
-    {
-      label: "\u7fa4\u7d44\u8b8a\u7570\u6578\u62c6\u89e3",
-      value: fmtPct(record.groupVariance.industry),
-      rawValue: record.groupVariance.industry,
-      details: [
-        { label: "\u98a8\u683c", value: fmtPct(record.groupVariance.style) },
-        { label: "\u6b98\u5dee", value: fmtPct(record.groupVariance.residual) },
-      ],
-    },
-  ]);
-}
-
-function renderStockGroupCharts(record) {
-  const labels = ["產業", "風格", "殘差"];
-  const ret = [record.groupReturn.industry, record.groupReturn.style, record.groupReturn.residual];
-  const vari = [
-    record.groupVariance.industry,
-    record.groupVariance.style,
-    record.groupVariance.residual,
-  ];
-
-  plot(
-    "chart-stock-group-return",
-    [
-      {
-        x: labels,
-        y: ret,
-        type: "bar",
-        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
-      },
-    ],
-    { yaxis: { tickformat: ".2%", title: "Return" } }
-  );
-
-  plot(
-    "chart-stock-group-variance",
-    [
-      {
-        x: labels,
-        y: vari,
-        type: "bar",
-        marker: { color: [COLOR.industry, COLOR.style, COLOR.residual] },
-      },
-    ],
-    { yaxis: { tickformat: ".2%", title: "Variance" } }
-  );
-}
-
-function renderStockFactorBreakdown(record, factors, prefix) {
-  const labels = prettyFactorList(factors.map((f) => f.factor));
-  const exposures = factors.map((f) => f.exposure);
-  const retContrib = factors.map((f) => f.returnContribution);
-  const varContrib = factors.map((f) => f.varianceContribution);
-  const sortedExposure = sortHorizontalByPrimary(labels, exposures);
-  const sortedReturn = sortHorizontalByPrimary(labels, retContrib);
-  const sortedVariance = sortHorizontalByPrimary(labels, varContrib);
-
-  plot(
-    `chart-stock-${prefix}-exposure`,
-    [
-      {
-        y: sortedExposure.labels,
-        x: sortedExposure.primary,
-        type: "bar",
-        orientation: "h",
-        marker: { color: prefix === "industry" ? COLOR.industry : COLOR.style },
-      },
-    ],
-    {
-      xaxis: { title: "Exposure", tickformat: ",.3f" },
-      yaxis: { automargin: true, autorange: "reversed" },
-    }
-  );
-
-  plot(
-    `chart-stock-${prefix}-return`,
-    [
-      {
-        y: sortedReturn.labels,
-        x: sortedReturn.primary,
-        type: "bar",
-        orientation: "h",
-        marker: { color: prefix === "industry" ? COLOR.portfolio : COLOR.benchmark },
-      },
-    ],
-    {
-      xaxis: { title: "Return Contribution", tickformat: ".2%" },
-      yaxis: { automargin: true, autorange: "reversed" },
-    }
-  );
-
-  plot(
-    `chart-stock-${prefix}-variance`,
-    [
-      {
-        y: sortedVariance.labels,
-        x: sortedVariance.primary,
-        type: "bar",
-        orientation: "h",
-        marker: { color: "#334155" },
-      },
-    ],
-    {
-      xaxis: { title: "Variance Contribution", tickformat: ".2%" },
-      yaxis: { automargin: true, autorange: "reversed" },
-    }
-  );
-}
-
-function renderStockAllExposure(record) {
-  const industry = record.industryFactors || [];
-  const style = record.styleFactors || [];
-
-  plot(
-    "chart-stock-all-exposure",
-    [
-      {
-        y: prettyFactorList(industry.map((x) => x.factor)),
-        x: industry.map((x) => x.exposure),
-        type: "bar",
-        orientation: "h",
-        name: "Industry",
-        marker: { color: COLOR.industry },
-      },
-      {
-        y: prettyFactorList(style.map((x) => x.factor)),
-        x: style.map((x) => x.exposure),
-        type: "bar",
-        orientation: "h",
-        name: "Style",
-        marker: { color: COLOR.style },
-      },
-    ],
-    {
-      barmode: "group",
-      xaxis: { title: "Exposure", tickformat: ",.3f" },
-      yaxis: { automargin: true },
-    }
-  );
-}
-
-function renderStockTab() {
-  const monthData = state.payload.stocks.byMonth[state.month];
-  if (!monthData?.assets?.length) return;
-
-  if (!state.stock || !monthData.records[state.stock]) {
-    state.stock = monthData.assets[0];
-    stockSelect.value = state.stock;
-  }
-
-  const record = monthData.records[state.stock];
-  renderStockMetrics(record);
-  renderStockGroupCharts(record);
-  renderStockFactorBreakdown(record, record.industryFactors, "industry");
-  renderStockFactorBreakdown(record, record.styleFactors, "style");
-  renderStockAllExposure(record);
-}
-
-function renderFactorTab() {
-  const factors = state.payload.factorStats.factors;
-  const returnsByMonth = state.payload.factorStats.returnsByMonth;
-
-  const sorted = factors
-    .map((factor) => ({ factor, value: returnsByMonth[state.month]?.[factor] ?? null }))
-    .sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
-
-  plot(
-    "chart-factor-cross",
-    [
-      {
-        y: prettyFactorList(sorted.map((r) => r.factor)),
-        x: sorted.map((r) => r.value),
-        type: "bar",
-        orientation: "h",
-        marker: { color: sorted.map((r) => ((r.value || 0) >= 0 ? COLOR.portfolio : COLOR.residual)) },
-      },
-    ],
-    {
-      margin: { l: 130, r: 20, t: 26, b: 65 },
-      xaxis: { title: `Factor Return (${state.month})`, tickformat: ".2%" },
-      yaxis: { automargin: true, autorange: "reversed" },
-    }
-  );
 }
 
 function renderAll() {
-  renderPortfolioTab();
+  renderCompareTab();
+  renderSubfactorTab();
+  renderFactorTableTab();
   renderStockTab();
-  renderFactorTab();
   scheduleResizeActiveTab();
 }
 
 function bindTabs() {
   const buttons = document.querySelectorAll(".tab-button");
   const panels = document.querySelectorAll(".tab-panel");
+
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.getAttribute("data-tab");
@@ -661,18 +974,26 @@ function bindTabs() {
   });
 }
 
-async function loadPayload() {
-  const res = await fetch("./data/payload.json", { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to load payload.json (${res.status})`);
-  return res.json();
-}
-
 function initSelectors() {
-  const dates = state.payload.meta.dates;
+  const dates = state.payload.meta.dates || [];
   monthSelect.innerHTML = dates.map((d) => `<option value="${d}">${d}</option>`).join("");
-  state.month = dates[dates.length - 1];
+  state.month = dates[dates.length - 1] || null;
   monthSelect.value = state.month;
+
+  const funds = state.payload.meta.funds || [];
+  fundSelect.innerHTML = funds
+    .map((f) => `<option value="${f.fund_code}">${f.fund_code} ${f.fund_name}</option>`)
+    .join("");
+
+  state.maxSelectableFunds = Number(state.payload.meta.maxSelectableFunds || 5);
+  state.selectedFunds = funds.slice(0, Math.min(3, state.maxSelectableFunds)).map((f) => f.fund_code);
+
+  syncSelectedFundsInDom();
+  setHint(`已選 ${state.selectedFunds.length} / ${state.maxSelectableFunds}`);
+  syncFactorTrendFundOptions();
+  updateStockFundOptions();
   updateStockOptions();
+  renderBenchmarkNote();
 }
 
 function bindControls() {
@@ -682,31 +1003,94 @@ function bindControls() {
     renderAll();
   });
 
+  fundSelect.addEventListener("change", () => {
+    const picked = [...fundSelect.selectedOptions].map((o) => o.value);
+    const limited = enforceFundSelectionLimit(picked);
+    state.selectedFunds = limited;
+    syncSelectedFundsInDom();
+
+    if (picked.length > limited.length) {
+      setHint(`最多可選 ${state.maxSelectableFunds} 檔基金，已保留前 ${state.maxSelectableFunds} 檔。`);
+    } else {
+      setHint(`已選 ${state.selectedFunds.length} / ${state.maxSelectableFunds}`);
+    }
+
+    updateStockFundOptions();
+    updateStockOptions();
+    renderAll();
+  });
+
+  subfactorMetricSelect.addEventListener("change", () => {
+    renderSubfactorTab();
+    scheduleResizeActiveTab();
+  });
+
+  subfactorTopnSelect.addEventListener("change", () => {
+    renderSubfactorTab();
+    scheduleResizeActiveTab();
+  });
+
+  factorTableGroupSelect.addEventListener("change", () => {
+    renderFactorTableTab();
+    scheduleResizeActiveTab();
+  });
+
+  factorTableFactorSelect?.addEventListener("change", (e) => {
+    state.factorTableFactor = e.target.value || null;
+    renderFactorTableTrendChart(state.factorTableFactor);
+    scheduleResizeActiveTab();
+  });
+
+  factorTrendModeSelect?.addEventListener("change", () => {
+    renderCompareTab();
+    scheduleResizeActiveTab();
+  });
+
+  factorTrendFundSelect?.addEventListener("change", (e) => {
+    state.factorTrendFund = e.target.value || null;
+    renderCompareTab();
+    scheduleResizeActiveTab();
+  });
+
+  stockFundSelect.addEventListener("change", (e) => {
+    state.stockFund = e.target.value || null;
+    updateStockOptions();
+    renderStockTab();
+    scheduleResizeActiveTab();
+  });
+
   stockSelect.addEventListener("change", (e) => {
-    state.stock = e.target.value;
+    state.stock = e.target.value || null;
     renderStockTab();
     scheduleResizeActiveTab();
   });
 }
 
+async function loadPayload() {
+  const res = await fetch("./data/payload.json", { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to load payload.json (${res.status})`);
+  return res.json();
+}
+
 async function init() {
   try {
     state.payload = await loadPayload();
+    initDataMaps();
     bindTabs();
     initSelectors();
     bindControls();
     bindWindowResize();
     renderAll();
-  } catch (error) {
+  } catch (err) {
     const shell = document.querySelector(".shell");
     shell.innerHTML = `
       <div class="card">
         <h2>載入失敗</h2>
-        <p>${error.message}</p>
-        <p>請確認 <code>frontend/data/payload.json</code> 存在，並用靜態伺服器開啟。</p>
+        <p>${err.message}</p>
+        <p>請先執行 <code>python .\\scripts\\build_payload.py</code> 重新產生 payload。</p>
       </div>
     `;
-    console.error(error);
+    console.error(err);
   }
 }
 

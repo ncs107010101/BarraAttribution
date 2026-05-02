@@ -1,28 +1,17 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-STYLE_EXPOSURE_EPS = 1.0e-8
-WEIGHT_TOL = 1.0e-6
-
-
-def _month_key(value: Any) -> str:
-    return pd.Timestamp(value).strftime("%Y-%m-%d")
-
-
-def _single_row(df: pd.DataFrame, key: Any, key_name: str) -> pd.Series:
-    row = df.loc[key]
-    if isinstance(row, pd.DataFrame):
-        if len(row) != 1:
-            raise ValueError(f"{key_name} has {len(row)} rows for key={key}.")
-        return row.iloc[0]
-    return row
+MAX_SELECTABLE_FUNDS = 5
+FACTOR_WEIGHT_EPS = 1.0e-10
+DESC_DISPLAY_ALIASES = {
+    "desc_beta": "desc_volatility_2",
+}
 
 
 def _safe_float(value: Any, digits: int = 10) -> float | None:
@@ -37,16 +26,28 @@ def _safe_float(value: Any, digits: int = 10) -> float | None:
     return round(x, digits)
 
 
-def _style_label(name: str) -> str:
-    prefix = "sty_orth_desc_"
-    if name.startswith(prefix):
-        return name[len(prefix) :]
+def _month_key(value: Any) -> str:
+    return pd.Timestamp(value).strftime("%Y-%m")
+
+
+def _factor_label(name: str) -> str:
+    if name.startswith("sty_orth_"):
+        return name.replace("sty_orth_", "style_")
     return name
 
 
-def _load_inputs(root: Path) -> dict[str, pd.DataFrame]:
-    output_dir = root / "data" / "tw_50_data" / "output"
-    input_dir = root / "data" / "tw_50_data" / "input"
+def _display_desc_name(name: str) -> str:
+    return DESC_DISPLAY_ALIASES.get(name, name)
+
+
+def _weighted_exposure(contrib: float, factor_ret: float) -> float:
+    if abs(factor_ret) <= FACTOR_WEIGHT_EPS:
+        return 0.0
+    return contrib / factor_ret
+
+
+def _load_inputs(root: Path) -> dict[str, Any]:
+    output_dir = root / "data" / "tw_multiFund" / "output_full"
     required = {
         "portfolio_return": output_dir / "portfolio_return_decomp.parquet",
         "benchmark_return": output_dir / "benchmark_return_decomp.parquet",
@@ -57,16 +58,24 @@ def _load_inputs(root: Path) -> dict[str, pd.DataFrame]:
         "asset_return": output_dir / "asset_return_decomp.parquet",
         "asset_risk": output_dir / "asset_risk_decomp.parquet",
         "factor_returns": output_dir / "factor_returns.parquet",
-        "multi_industry": input_dir / "multi_industry.parquet",
+        "run_metadata": output_dir / "run_metadata.json",
     }
-    missing = [str(path) for path in required.values() if not path.exists()]
+    missing = [str(p) for p in required.values() if not p.exists()]
     if missing:
-        raise FileNotFoundError(f"Missing required data files: {missing}")
+        raise FileNotFoundError(f"Missing required files: {missing}")
 
-    tables: dict[str, pd.DataFrame] = {}
-    for key, path in required.items():
-        df = pd.read_parquet(path)
-        tables[key] = df
+    tables: dict[str, Any] = {
+        "portfolio_return": pd.read_parquet(required["portfolio_return"]),
+        "benchmark_return": pd.read_parquet(required["benchmark_return"]),
+        "active_return": pd.read_parquet(required["active_return"]),
+        "portfolio_risk": pd.read_parquet(required["portfolio_risk"]),
+        "benchmark_risk": pd.read_parquet(required["benchmark_risk"]),
+        "active_risk": pd.read_parquet(required["active_risk"]),
+        "asset_return": pd.read_parquet(required["asset_return"]),
+        "asset_risk": pd.read_parquet(required["asset_risk"]),
+        "factor_returns": pd.read_parquet(required["factor_returns"]),
+        "run_metadata": json.loads(required["run_metadata"].read_text(encoding="utf-8")),
+    }
 
     for key in [
         "portfolio_return",
@@ -77,413 +86,442 @@ def _load_inputs(root: Path) -> dict[str, pd.DataFrame]:
         "active_risk",
         "asset_return",
         "asset_risk",
-        "multi_industry",
+        "factor_returns",
     ]:
         tables[key]["date"] = pd.to_datetime(tables[key]["date"], errors="raise")
 
-    tables["factor_returns"].index = pd.to_datetime(
-        tables["factor_returns"].index, errors="raise"
-    )
     return tables
 
 
-def _build_payload(root: Path) -> dict[str, Any]:
-    tables = _load_inputs(root)
-    portfolio_return = tables["portfolio_return"].sort_values("date").reset_index(drop=True)
-    benchmark_return = tables["benchmark_return"].sort_values("date").reset_index(drop=True)
-    active_return = tables["active_return"].sort_values("date").reset_index(drop=True)
-    portfolio_risk = tables["portfolio_risk"].sort_values("date").reset_index(drop=True)
-    benchmark_risk = tables["benchmark_risk"].sort_values("date").reset_index(drop=True)
-    active_risk = tables["active_risk"].sort_values("date").reset_index(drop=True)
-    asset_return = tables["asset_return"].sort_values(["date", "asset_id"]).reset_index(drop=True)
-    asset_risk = tables["asset_risk"].sort_values(["date", "asset_id"]).reset_index(drop=True)
-    factor_returns = tables["factor_returns"].sort_index()
-    multi_industry = tables["multi_industry"].copy()
-
+def _factor_groups(portfolio_return: pd.DataFrame, portfolio_risk: pd.DataFrame) -> tuple[list[str], list[str]]:
     contrib_cols = [c for c in portfolio_return.columns if c.startswith("contrib_")]
-    industry_factors = [
-        c[len("contrib_") :] for c in contrib_cols if not c.startswith("contrib_sty_")
-    ]
     style_factors = [c[len("contrib_") :] for c in contrib_cols if c.startswith("contrib_sty_")]
-    all_factors = [*industry_factors, *style_factors]
-    if not industry_factors or not style_factors:
-        raise ValueError("Failed to identify industry/style factors from portfolio data.")
+    industry_factors = [c[len("contrib_") :] for c in contrib_cols if not c.startswith("contrib_sty_")]
 
     risk_cols = set(portfolio_risk.columns)
-    missing_risk_cols = [f"factor_risk_{f}" for f in all_factors if f"factor_risk_{f}" not in risk_cols]
-    if missing_risk_cols:
-        raise ValueError(f"Missing risk decomposition columns: {missing_risk_cols}")
+    missing_risk = [
+        f"factor_risk_{f}" for f in [*industry_factors, *style_factors] if f"factor_risk_{f}" not in risk_cols
+    ]
+    if missing_risk:
+        raise ValueError(f"Missing factor risk columns: {missing_risk[:10]}")
 
-    unique_dates = sorted(pd.to_datetime(portfolio_return["date"]).unique())
-    date_keys = [_month_key(d) for d in unique_dates]
-    if len(unique_dates) == 0:
-        raise ValueError("No dates found in portfolio_return_decomp.")
+    return industry_factors, style_factors
 
-    portfolio_return_idx = portfolio_return.set_index("date")
-    benchmark_return_idx = benchmark_return.set_index("date")
-    active_return_idx = active_return.set_index("date")
-    portfolio_risk_idx = portfolio_risk.set_index("date")
-    benchmark_risk_idx = benchmark_risk.set_index("date")
-    active_risk_idx = active_risk.set_index("date")
 
-    weights_by_date = (
-        asset_return.groupby("date", as_index=True)[["w_port", "w_bench"]].sum().sort_index()
-    )
-    bad_weight_dates = []
-    for date, row in weights_by_date.iterrows():
-        if abs(float(row["w_port"]) - 1.0) > WEIGHT_TOL or abs(float(row["w_bench"]) - 1.0) > WEIGHT_TOL:
-            bad_weight_dates.append(_month_key(date))
-    if bad_weight_dates:
-        raise ValueError(f"Weight sums are not close to 1.0 for dates: {bad_weight_dates}")
+def _build_payload(root: Path) -> dict[str, Any]:
+    t = _load_inputs(root)
+    portfolio_return = t["portfolio_return"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    benchmark_return = t["benchmark_return"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    active_return = t["active_return"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    portfolio_risk = t["portfolio_risk"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    benchmark_risk = t["benchmark_risk"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    active_risk = t["active_risk"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    asset_return = t["asset_return"].sort_values(["fund_code", "date", "asset_id"]).reset_index(drop=True)
+    asset_risk = t["asset_risk"].sort_values(["fund_code", "date", "asset_id"]).reset_index(drop=True)
+    factor_returns = t["factor_returns"].sort_values(["fund_code", "date"]).reset_index(drop=True)
+    run_meta: dict[str, Any] = t["run_metadata"]
 
-    multi_industry["date"] = multi_industry["date"].dt.to_period("M").dt.to_timestamp()
-    industry_monthly = (
-        multi_industry.groupby(["date", "asset_id", "industry_id"], as_index=False)["industry_weight"].mean()
-    )
-    month_asset_weights = (
-        asset_return[["date", "asset_id", "w_port", "w_bench"]]
-        .groupby(["date", "asset_id"], as_index=False)
-        .mean()
-    )
-    industry_with_weights = industry_monthly.merge(
-        month_asset_weights, on=["date", "asset_id"], how="left"
-    )
-    industry_with_weights[["w_port", "w_bench"]] = industry_with_weights[["w_port", "w_bench"]].fillna(0.0)
-    industry_with_weights["weight_port_factor"] = (
-        industry_with_weights["industry_weight"] * industry_with_weights["w_port"]
-    )
-    industry_with_weights["weight_bench_factor"] = (
-        industry_with_weights["industry_weight"] * industry_with_weights["w_bench"]
-    )
+    industry_factors, style_factors = _factor_groups(portfolio_return, portfolio_risk)
+    all_factors = [*industry_factors, *style_factors]
+    industry_contrib_cols = [f"contrib_{f}" for f in industry_factors]
+    style_contrib_cols = [f"contrib_{f}" for f in style_factors]
+    industry_risk_cols = [f"factor_risk_{f}" for f in industry_factors]
+    style_risk_cols = [f"factor_risk_{f}" for f in style_factors]
 
-    industry_factor_weights = (
-        industry_with_weights.groupby(["date", "industry_id"], as_index=False)[
-            ["weight_port_factor", "weight_bench_factor"]
-        ].sum()
-    )
-
-    industry_asset_exposure: dict[str, dict[str, dict[str, float]]] = {}
-    for row in industry_monthly.itertuples(index=False):
-        date_key = _month_key(row.date)
-        asset = str(row.asset_id)
-        factor = str(row.industry_id)
-        industry_asset_exposure.setdefault(date_key, {}).setdefault(asset, {})[factor] = (
-            _safe_float(row.industry_weight) or 0.0
+    merged = (
+        portfolio_return[
+            [
+                "fund_code",
+                "fund_name",
+                "date",
+                "return_ym",
+                "holding_ym",
+                "ret_port",
+                "residual_port",
+                *industry_contrib_cols,
+                *style_contrib_cols,
+            ]
+        ]
+        .merge(
+            benchmark_return[
+                [
+                    "fund_code",
+                    "date",
+                    "ret_bench",
+                    "residual_bench",
+                    *industry_contrib_cols,
+                    *style_contrib_cols,
+                ]
+            ],
+            on=["fund_code", "date"],
+            how="inner",
+            suffixes=("", "_bench"),
         )
+        .merge(
+            active_return[["fund_code", "date", "ret_active"]],
+            on=["fund_code", "date"],
+            how="inner",
+        )
+        .merge(
+            portfolio_risk[
+                [
+                    "fund_code",
+                    "date",
+                    "lhs_var",
+                    "residual_risk_total",
+                    *industry_risk_cols,
+                    *style_risk_cols,
+                ]
+            ].rename(
+                columns={
+                    "lhs_var": "variance_port",
+                    "residual_risk_total": "residual_variance_port",
+                }
+            ),
+            on=["fund_code", "date"],
+            how="inner",
+        )
+        .merge(
+            benchmark_risk[
+                [
+                    "fund_code",
+                    "date",
+                    "lhs_var",
+                    "residual_risk_total",
+                    *industry_risk_cols,
+                    *style_risk_cols,
+                ]
+            ].rename(
+                columns={
+                    "lhs_var": "variance_bench",
+                    "residual_risk_total": "residual_variance_bench",
+                    **{f"{c}": f"{c}_bench" for c in [*industry_risk_cols, *style_risk_cols]},
+                }
+            ),
+            on=["fund_code", "date"],
+            how="inner",
+        )
+        .merge(
+            active_risk[["fund_code", "date", "tracking_error_model", "tracking_error_var_model"]],
+            on=["fund_code", "date"],
+            how="inner",
+        )
+        .sort_values(["fund_code", "date"])
+        .reset_index(drop=True)
+    )
 
-    industry_weight_lookup: dict[str, dict[str, dict[str, float]]] = {}
-    for row in industry_factor_weights.itertuples(index=False):
-        date_key = _month_key(row.date)
-        factor = str(row.industry_id)
-        industry_weight_lookup.setdefault(date_key, {})[factor] = {
-            "portfolio": _safe_float(row.weight_port_factor) or 0.0,
-            "benchmark": _safe_float(row.weight_bench_factor) or 0.0,
-        }
+    merged["industry_return"] = merged[industry_contrib_cols].sum(axis=1)
+    merged["style_return"] = merged[style_contrib_cols].sum(axis=1)
+    merged["residual_return"] = merged["residual_port"]
+    merged["industry_variance"] = merged[industry_risk_cols].sum(axis=1)
+    merged["style_variance"] = merged[style_risk_cols].sum(axis=1)
+    merged["residual_variance"] = merged["residual_variance_port"]
 
-    port_monthly = portfolio_return.set_index("date")["ret_port"].reindex(unique_dates)
-    bench_monthly = benchmark_return.set_index("date")["ret_bench"].reindex(unique_dates)
-    cum_port = (1.0 + port_monthly).cumprod() - 1.0
-    cum_bench = (1.0 + bench_monthly).cumprod() - 1.0
-    cum_active = ((1.0 + port_monthly).cumprod() / (1.0 + bench_monthly).cumprod()) - 1.0
+    funds_meta = (
+        merged[["fund_code", "fund_name"]]
+        .drop_duplicates()
+        .sort_values("fund_code")
+        .to_dict(orient="records")
+    )
+    dates = sorted(merged["date"].unique().tolist())
+    date_keys = [_month_key(d) for d in dates]
+
+    benchmark_label = (
+        "台股全市場動態市值基準（上市+上櫃；每月以 exp(desc_size) 正規化，"
+        "並與基金持股做次月報酬對齊）"
+    )
+
+    desc_cols_meta = [
+        str(c)
+        for c in run_meta.get("preprocess", {}).get("desc_columns", [])
+        if isinstance(c, str) and c.startswith("desc_")
+    ]
+    style_desc_candidates = [_display_desc_name(c) for c in desc_cols_meta if c != "desc_is_otc"]
+    style_label_map: dict[str, str] = {}
+    for sf in style_factors:
+        if sf.startswith("sty_orth_desc_"):
+            style_label_map[sf] = _display_desc_name(sf.replace("sty_orth_", ""))
+            continue
+        if sf.startswith("sty_orth_"):
+            tail = sf.replace("sty_orth_", "")
+            if tail.isdigit():
+                idx = int(tail) - 1
+                if 0 <= idx < len(style_desc_candidates):
+                    style_label_map[sf] = _display_desc_name(style_desc_candidates[idx])
+                    continue
+        style_label_map[sf] = _factor_label(sf)
+
+    factor_label_map = {f: _factor_label(f) for f in industry_factors}
+    factor_label_map.update(style_label_map)
 
     payload: dict[str, Any] = {
         "meta": {
             "generatedAt": pd.Timestamp.utcnow().isoformat(),
+            "maxSelectableFunds": MAX_SELECTABLE_FUNDS,
             "dates": date_keys,
+            "funds": funds_meta,
             "industryFactors": industry_factors,
             "styleFactors": style_factors,
-            "factorLabels": {
-                **{f: f for f in industry_factors},
-                **{f: _style_label(f) for f in style_factors},
+            "factorLabels": factor_label_map,
+            "styleDescriptorCandidates": style_desc_candidates,
+            "benchmarkDefinition": benchmark_label,
+            "source": {
+                "outputDir": str(root / "data" / "tw_multiFund" / "output_full"),
+                "alignment": run_meta.get("alignment", {}),
             },
-            "assets": sorted(asset_return["asset_id"].dropna().astype(str).unique().tolist()),
         },
-        "portfolio": {
-            "metricsByMonth": {},
-            "series": [],
-            "groupByMonth": {},
-            "industryFactorsByMonth": {},
-            "styleFactorsByMonth": {},
-        },
-        "stocks": {"byMonth": {}},
-        "factorStats": {
-            "factors": all_factors,
-            "returnsByMonth": {},
-        },
+        "funds": {},
+        "factorReturnsByMonth": {},
     }
 
-    non_finite_style_exposure_count = 0
+    factor_returns_by_month: dict[str, dict[str, float | None]] = {}
+    fr_monthly_mean = (
+        factor_returns.groupby("date", as_index=True)[all_factors]
+        .mean(numeric_only=True)
+        .sort_index()
+    )
+    for d, rec in fr_monthly_mean.iterrows():
+        month_key = _month_key(d)
+        factor_returns_by_month[month_key] = {f: _safe_float(rec[f]) for f in all_factors}
+    payload["factorReturnsByMonth"] = factor_returns_by_month
 
-    for date in unique_dates:
-        date_key = _month_key(date)
-        port_ret_row = _single_row(portfolio_return_idx, date, "portfolio_return")
-        bench_ret_row = _single_row(benchmark_return_idx, date, "benchmark_return")
-        active_ret_row = _single_row(active_return_idx, date, "active_return")
-        port_risk_row = _single_row(portfolio_risk_idx, date, "portfolio_risk")
-        bench_risk_row = _single_row(benchmark_risk_idx, date, "benchmark_risk")
-        active_risk_row = _single_row(active_risk_idx, date, "active_risk")
-        factor_ret_row = _single_row(factor_returns, date, "factor_returns")
+    factor_return_idx = factor_returns.set_index(["fund_code", "date"])
+    portfolio_return_idx = portfolio_return.set_index(["fund_code", "date"])
+    benchmark_return_idx = benchmark_return.set_index(["fund_code", "date"])
+    portfolio_risk_idx = portfolio_risk.set_index(["fund_code", "date"])
+    benchmark_risk_idx = benchmark_risk.set_index(["fund_code", "date"])
 
-        month_asset_ret = asset_return[asset_return["date"] == date].copy()
-        month_asset_risk = asset_risk[asset_risk["date"] == date].copy()
-        month_asset_ret = month_asset_ret.groupby("asset_id", as_index=False).mean(numeric_only=True)
-        month_asset_risk = month_asset_risk.groupby("asset_id", as_index=False).mean(numeric_only=True)
-        month_asset = month_asset_ret.merge(
-            month_asset_risk,
-            on="asset_id",
-            how="inner",
-            suffixes=("_ret", "_risk"),
-        )
+    for fund in funds_meta:
+        code = str(fund["fund_code"])
+        name = str(fund["fund_name"])
+        g = merged[merged["fund_code"] == code].sort_values("date").copy()
+        if g.empty:
+            continue
 
-        style_weight_port: dict[str, float] = {f: 0.0 for f in style_factors}
-        style_weight_bench: dict[str, float] = {f: 0.0 for f in style_factors}
+        port_vals = g["ret_port"].to_numpy(dtype=float)
+        bench_vals = g["ret_bench"].to_numpy(dtype=float)
+        cum_port = np.cumprod(1.0 + port_vals) - 1.0
+        cum_bench = np.cumprod(1.0 + bench_vals) - 1.0
+        cum_active = (np.cumprod(1.0 + port_vals) / np.cumprod(1.0 + bench_vals)) - 1.0
 
-        stock_records: dict[str, Any] = {}
-        month_assets = month_asset.sort_values("w_port_ret", ascending=False)["asset_id"].astype(str).tolist()
+        series_rows: list[dict[str, Any]] = []
+        for i, row in enumerate(g.itertuples(index=False)):
+            variance_port = float(row.variance_port)
+            variance_bench = float(row.variance_bench)
+            tracking_error = float(row.tracking_error_model)
+            ret_port = float(row.ret_port)
+            ret_bench = float(row.ret_bench)
+            ret_active = float(row.ret_active)
+            sharpe_port = ret_port / np.sqrt(variance_port) if variance_port > 0 else None
+            sharpe_bench = ret_bench / np.sqrt(variance_bench) if variance_bench > 0 else None
+            information = ret_active / tracking_error if abs(tracking_error) > 0 else None
 
-        for row in month_asset.itertuples(index=False):
-            asset_id = str(row.asset_id)
-            w_port = float(row.w_port_ret)
-            w_bench = float(row.w_bench_ret)
+            series_rows.append(
+                {
+                    "date": _month_key(row.date),
+                    "returnYm": str(row.return_ym),
+                    "holdingYm": str(row.holding_ym),
+                    "returnPort": _safe_float(ret_port),
+                    "returnBench": _safe_float(ret_bench),
+                    "returnActive": _safe_float(ret_active),
+                    "cumPort": _safe_float(cum_port[i]),
+                    "cumBench": _safe_float(cum_bench[i]),
+                    "cumActive": _safe_float(cum_active[i]),
+                    "variancePort": _safe_float(variance_port),
+                    "varianceBench": _safe_float(variance_bench),
+                    "trackingError": _safe_float(tracking_error),
+                    "trackingErrorVar": _safe_float(row.tracking_error_var_model),
+                    "sharpePort": _safe_float(sharpe_port),
+                    "sharpeBench": _safe_float(sharpe_bench),
+                    "information": _safe_float(information),
+                    "groupReturn": {
+                        "industry": _safe_float(row.industry_return),
+                        "style": _safe_float(row.style_return),
+                        "residual": _safe_float(row.residual_return),
+                    },
+                    "groupVariance": {
+                        "industry": _safe_float(row.industry_variance),
+                        "style": _safe_float(row.style_variance),
+                        "residual": _safe_float(row.residual_variance),
+                    },
+                }
+            )
 
-            industry_exp_map = industry_asset_exposure.get(date_key, {}).get(asset_id, {})
-            industry_items = []
-            style_items = []
+        factor_by_month: dict[str, Any] = {}
+        for d in g["date"].tolist():
+            month_key = _month_key(d)
+            fr_row = factor_return_idx.loc[(code, d)]
+            pr_row = portfolio_return_idx.loc[(code, d)]
+            br_row = benchmark_return_idx.loc[(code, d)]
+            pk_row = portfolio_risk_idx.loc[(code, d)]
+            bk_row = benchmark_risk_idx.loc[(code, d)]
 
-            for factor in industry_factors:
-                exposure = float(industry_exp_map.get(factor, 0.0))
-                factor_ret = float(factor_ret_row.get(factor, 0.0))
-                ret_contrib = float(getattr(row, f"contrib_{factor}"))
-                var_contrib = float(getattr(row, f"factor_risk_{factor}"))
-                industry_items.append(
-                    {
-                        "factor": factor,
-                        "factorReturn": _safe_float(factor_ret),
-                        "exposure": _safe_float(exposure),
-                        "returnContribution": _safe_float(ret_contrib),
-                        "varianceContribution": _safe_float(var_contrib),
-                        "weightPort": _safe_float(w_port),
-                        "weightBench": _safe_float(w_bench),
-                        "weightPortFactor": _safe_float(w_port * exposure),
-                        "weightBenchFactor": _safe_float(w_bench * exposure),
-                    }
+            def _pack(factors: list[str]) -> dict[str, list[float | None]]:
+                port_ret = []
+                bench_ret = []
+                port_var = []
+                bench_var = []
+                port_w = []
+                bench_w = []
+                for f in factors:
+                    ckey = f"contrib_{f}"
+                    rkey = f"factor_risk_{f}"
+                    p_ret = float(pr_row[ckey])
+                    b_ret = float(br_row[ckey])
+                    p_var = float(pk_row[rkey])
+                    b_var = float(bk_row[rkey])
+                    f_ret = float(fr_row[f])
+                    p_w = _weighted_exposure(p_ret, f_ret)
+                    b_w = _weighted_exposure(b_ret, f_ret)
+
+                    port_ret.append(_safe_float(p_ret))
+                    bench_ret.append(_safe_float(b_ret))
+                    port_var.append(_safe_float(p_var))
+                    bench_var.append(_safe_float(b_var))
+                    port_w.append(_safe_float(p_w))
+                    bench_w.append(_safe_float(b_w))
+
+                return {
+                    "pr": port_ret,
+                    "br": bench_ret,
+                    "pv": port_var,
+                    "bv": bench_var,
+                    "pw": port_w,
+                    "bw": bench_w,
+                }
+
+            factor_by_month[month_key] = {
+                "industry": _pack(industry_factors),
+                "style": _pack(style_factors),
+            }
+
+        payload["funds"][code] = {
+            "fundCode": code,
+            "fundName": name,
+            "series": series_rows,
+            "factorByMonth": factor_by_month,
+            "stocksByMonth": {},
+        }
+
+    risk_cols_for_join = [
+        "fund_code",
+        "fund_name",
+        "date",
+        "asset_id",
+        "w_port",
+        "w_bench",
+        "lhs_var",
+        "residual_risk_total",
+        "return_ym",
+        "holding_ym",
+        *industry_risk_cols,
+        *style_risk_cols,
+    ]
+    ret_cols_for_join = [
+        "fund_code",
+        "fund_name",
+        "date",
+        "asset_id",
+        "ret",
+        "residual",
+        "return_ym",
+        "holding_ym",
+        *industry_contrib_cols,
+        *style_contrib_cols,
+    ]
+
+    asset_join = asset_return[ret_cols_for_join].merge(
+        asset_risk[risk_cols_for_join],
+        on=["fund_code", "fund_name", "date", "asset_id", "return_ym", "holding_ym"],
+        how="inner",
+        suffixes=("", "_risk"),
+    )
+    asset_join = asset_join[asset_join["w_port"] > 0].copy()
+    asset_join.sort_values(["fund_code", "date", "w_port"], ascending=[True, True, False], inplace=True)
+
+    for (code, d), month_df in asset_join.groupby(["fund_code", "date"], sort=True):
+        if code not in payload["funds"]:
+            continue
+
+        month_key = _month_key(d)
+        fr_row = factor_return_idx.loc[(code, d)]
+        records: dict[str, Any] = {}
+        assets_sorted: list[str] = []
+
+        for rec in month_df.to_dict(orient="records"):
+            asset_id = str(rec["asset_id"])
+            assets_sorted.append(asset_id)
+
+            industry_contrib_vals = [float(rec[c]) for c in industry_contrib_cols]
+            industry_risk_vals = [float(rec[c]) for c in industry_risk_cols]
+            style_contrib_vals = [float(rec[c]) for c in style_contrib_cols]
+            style_risk_vals = [float(rec[c]) for c in style_risk_cols]
+
+            if industry_contrib_vals:
+                ind_idx = int(np.argmax(np.abs(industry_contrib_vals)))
+                ind_factor = industry_factors[ind_idx]
+                ind_ret = industry_contrib_vals[ind_idx]
+                ind_var = industry_risk_vals[ind_idx]
+            else:
+                ind_factor = ""
+                ind_ret = 0.0
+                ind_var = 0.0
+
+            ind_factor_ret = float(fr_row[ind_factor]) if ind_factor else 0.0
+            ind_wexp = _weighted_exposure(ind_ret, ind_factor_ret)
+
+            style_rows: list[list[float | None]] = []
+            for idx, factor in enumerate(style_factors):
+                f_ret = float(fr_row[factor])
+                s_ret = style_contrib_vals[idx]
+                s_var = style_risk_vals[idx]
+                s_wexp = _weighted_exposure(s_ret, f_ret)
+                style_rows.append(
+                    [
+                        _safe_float(s_ret),
+                        _safe_float(s_var),
+                        _safe_float(f_ret),
+                        _safe_float(s_wexp),
+                    ]
                 )
 
-            for factor in style_factors:
-                factor_ret = float(factor_ret_row.get(factor, 0.0))
-                ret_contrib = float(getattr(row, f"contrib_{factor}"))
-                if abs(factor_ret) <= STYLE_EXPOSURE_EPS:
-                    exposure = 0.0
-                else:
-                    exposure = ret_contrib / factor_ret
-                if not np.isfinite(exposure):
-                    non_finite_style_exposure_count += 1
-                    exposure = 0.0
-                var_contrib = float(getattr(row, f"factor_risk_{factor}"))
-                style_weight_port[factor] += w_port * exposure
-                style_weight_bench[factor] += w_bench * exposure
-                style_items.append(
-                    {
-                        "factor": factor,
-                        "factorReturn": _safe_float(factor_ret),
-                        "exposure": _safe_float(exposure),
-                        "returnContribution": _safe_float(ret_contrib),
-                        "varianceContribution": _safe_float(var_contrib),
-                        "weightPort": _safe_float(w_port),
-                        "weightBench": _safe_float(w_bench),
-                        "weightPortFactor": _safe_float(w_port * exposure),
-                        "weightBenchFactor": _safe_float(w_bench * exposure),
-                    }
-                )
+            group_ret = [
+                _safe_float(sum(industry_contrib_vals)),
+                _safe_float(sum(style_contrib_vals)),
+                _safe_float(float(rec["residual"])),
+            ]
+            group_var = [
+                _safe_float(sum(industry_risk_vals)),
+                _safe_float(sum(style_risk_vals)),
+                _safe_float(float(rec["residual_risk_total"])),
+            ]
 
-            industry_return = sum(float(getattr(row, f"contrib_{f}")) for f in industry_factors)
-            style_return = sum(float(getattr(row, f"contrib_{f}")) for f in style_factors)
-            industry_variance = sum(float(getattr(row, f"factor_risk_{f}")) for f in industry_factors)
-            style_variance = sum(float(getattr(row, f"factor_risk_{f}")) for f in style_factors)
-
-            stock_records[asset_id] = {
+            records[asset_id] = {
                 "assetId": asset_id,
-                "return": _safe_float(row.ret),
-                "variance": _safe_float(row.lhs_var),
-                "weightPort": _safe_float(w_port),
-                "weightBench": _safe_float(w_bench),
-                "groupReturn": {
-                    "industry": _safe_float(industry_return),
-                    "style": _safe_float(style_return),
-                    "residual": _safe_float(row.residual),
+                "returnYm": str(rec["return_ym"]),
+                "holdingYm": str(rec["holding_ym"]),
+                "ret": _safe_float(rec["ret"]),
+                "var": _safe_float(rec["lhs_var"]),
+                "wPort": _safe_float(rec["w_port"]),
+                "wBench": _safe_float(rec["w_bench"]),
+                "activeWeight": _safe_float(float(rec["w_port"]) - float(rec["w_bench"])),
+                "groupRet": group_ret,
+                "groupVar": group_var,
+                "industry": {
+                    "factor": ind_factor,
+                    "r": _safe_float(ind_ret),
+                    "v": _safe_float(ind_var),
+                    "fr": _safe_float(ind_factor_ret),
+                    "x": _safe_float(ind_wexp),
                 },
-                "groupVariance": {
-                    "industry": _safe_float(industry_variance),
-                    "style": _safe_float(style_variance),
-                    "residual": _safe_float(row.residual_risk_total),
-                },
-                "industryFactors": industry_items,
-                "styleFactors": style_items,
+                "style": style_rows,
             }
 
-        payload["stocks"]["byMonth"][date_key] = {
-            "assets": month_assets,
-            "records": stock_records,
+        payload["funds"][code]["stocksByMonth"][month_key] = {
+            "assets": assets_sorted,
+            "records": records,
         }
 
-        ret_port = float(port_ret_row["ret_port"])
-        ret_bench = float(bench_ret_row["ret_bench"])
-        ret_active = float(active_ret_row["ret_active"])
-        var_port = float(port_risk_row["lhs_var"])
-        var_bench = float(bench_risk_row["lhs_var"])
-        tracking_error = float(active_risk_row["tracking_error_model"])
-        sharpe_port = ret_port / math.sqrt(var_port) if var_port > 0.0 else None
-        sharpe_bench = ret_bench / math.sqrt(var_bench) if var_bench > 0.0 else None
-        information = ret_active / tracking_error if abs(tracking_error) > 0.0 else None
-
-        payload["portfolio"]["metricsByMonth"][date_key] = {
-            "returnPort": _safe_float(ret_port),
-            "returnBench": _safe_float(ret_bench),
-            "returnActive": _safe_float(ret_active),
-            "variancePort": _safe_float(var_port),
-            "varianceBench": _safe_float(var_bench),
-            "sharpePort": _safe_float(sharpe_port),
-            "sharpeBench": _safe_float(sharpe_bench),
-            "information": _safe_float(information),
-            "trackingError": _safe_float(tracking_error),
-        }
-
-        payload["portfolio"]["series"].append(
-            {
-                "date": date_key,
-                "returnPort": _safe_float(ret_port),
-                "returnBench": _safe_float(ret_bench),
-                "returnActive": _safe_float(ret_active),
-                "cumPort": _safe_float(cum_port.loc[date]),
-                "cumBench": _safe_float(cum_bench.loc[date]),
-                "cumActive": _safe_float(cum_active.loc[date]),
-                "variancePort": _safe_float(var_port),
-                "varianceBench": _safe_float(var_bench),
-                "trackingError": _safe_float(tracking_error),
-                "sharpePort": _safe_float(sharpe_port),
-                "sharpeBench": _safe_float(sharpe_bench),
-                "information": _safe_float(information),
-            }
-        )
-
-        industry_port_return = sum(float(port_ret_row[f"contrib_{f}"]) for f in industry_factors)
-        style_port_return = sum(float(port_ret_row[f"contrib_{f}"]) for f in style_factors)
-        industry_bench_return = sum(float(bench_ret_row[f"contrib_{f}"]) for f in industry_factors)
-        style_bench_return = sum(float(bench_ret_row[f"contrib_{f}"]) for f in style_factors)
-        industry_port_var = sum(float(port_risk_row[f"factor_risk_{f}"]) for f in industry_factors)
-        style_port_var = sum(float(port_risk_row[f"factor_risk_{f}"]) for f in style_factors)
-        industry_bench_var = sum(float(bench_risk_row[f"factor_risk_{f}"]) for f in industry_factors)
-        style_bench_var = sum(float(bench_risk_row[f"factor_risk_{f}"]) for f in style_factors)
-
-        industry_weight_port_total = 0.0
-        industry_weight_bench_total = 0.0
-        month_industry_weights = industry_weight_lookup.get(date_key, {})
-        for factor in industry_factors:
-            values = month_industry_weights.get(factor, {"portfolio": 0.0, "benchmark": 0.0})
-            industry_weight_port_total += abs(float(values["portfolio"]))
-            industry_weight_bench_total += abs(float(values["benchmark"]))
-
-        style_weight_port_total = sum(abs(float(v)) for v in style_weight_port.values())
-        style_weight_bench_total = sum(abs(float(v)) for v in style_weight_bench.values())
-        invest_weights = weights_by_date.loc[date]
-
-        payload["portfolio"]["groupByMonth"][date_key] = {
-            "return": {
-                "industry": {
-                    "portfolio": _safe_float(industry_port_return),
-                    "benchmark": _safe_float(industry_bench_return),
-                },
-                "style": {
-                    "portfolio": _safe_float(style_port_return),
-                    "benchmark": _safe_float(style_bench_return),
-                },
-                "residual": {
-                    "portfolio": _safe_float(port_ret_row["residual_port"]),
-                    "benchmark": _safe_float(bench_ret_row["residual_bench"]),
-                },
-            },
-            "variance": {
-                "industry": {
-                    "portfolio": _safe_float(industry_port_var),
-                    "benchmark": _safe_float(industry_bench_var),
-                },
-                "style": {
-                    "portfolio": _safe_float(style_port_var),
-                    "benchmark": _safe_float(style_bench_var),
-                },
-                "residual": {
-                    "portfolio": _safe_float(port_risk_row["residual_risk_total"]),
-                    "benchmark": _safe_float(bench_risk_row["residual_risk_total"]),
-                },
-            },
-            "weight": {
-                "industry": {
-                    "portfolio": _safe_float(industry_weight_port_total),
-                    "benchmark": _safe_float(industry_weight_bench_total),
-                },
-                "style": {
-                    "portfolio": _safe_float(style_weight_port_total),
-                    "benchmark": _safe_float(style_weight_bench_total),
-                },
-                "residual": {"portfolio": 0.0, "benchmark": 0.0},
-            },
-            "investedWeight": {
-                "portfolio": _safe_float(invest_weights["w_port"]),
-                "benchmark": _safe_float(invest_weights["w_bench"]),
-            },
-        }
-
-        industry_rows = []
-        for factor in industry_factors:
-            factor_key = f"contrib_{factor}"
-            risk_key = f"factor_risk_{factor}"
-            iw = month_industry_weights.get(factor, {"portfolio": 0.0, "benchmark": 0.0})
-            industry_rows.append(
-                {
-                    "factor": factor,
-                    "portfolio": {
-                        "return": _safe_float(port_ret_row[factor_key]),
-                        "variance": _safe_float(port_risk_row[risk_key]),
-                        "weight": _safe_float(iw["portfolio"]),
-                    },
-                    "benchmark": {
-                        "return": _safe_float(bench_ret_row[factor_key]),
-                        "variance": _safe_float(bench_risk_row[risk_key]),
-                        "weight": _safe_float(iw["benchmark"]),
-                    },
-                }
-            )
-        payload["portfolio"]["industryFactorsByMonth"][date_key] = industry_rows
-
-        style_rows = []
-        for factor in style_factors:
-            factor_key = f"contrib_{factor}"
-            risk_key = f"factor_risk_{factor}"
-            style_rows.append(
-                {
-                    "factor": factor,
-                    "portfolio": {
-                        "return": _safe_float(port_ret_row[factor_key]),
-                        "variance": _safe_float(port_risk_row[risk_key]),
-                        "weight": _safe_float(style_weight_port[factor]),
-                    },
-                    "benchmark": {
-                        "return": _safe_float(bench_ret_row[factor_key]),
-                        "variance": _safe_float(bench_risk_row[risk_key]),
-                        "weight": _safe_float(style_weight_bench[factor]),
-                    },
-                }
-            )
-        payload["portfolio"]["styleFactorsByMonth"][date_key] = style_rows
-
-        payload["factorStats"]["returnsByMonth"][date_key] = {
-            factor: _safe_float(factor_ret_row[factor]) for factor in all_factors
-        }
-
-    if non_finite_style_exposure_count > 0:
-        raise ValueError(
-            f"Found non-finite style exposures during payload build: {non_finite_style_exposure_count}"
-        )
     return payload
 
 
@@ -492,12 +530,13 @@ def main() -> None:
     payload = _build_payload(root)
     output_path = root / "frontend" / "data" / "payload.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
 
     print(f"Payload written: {output_path}")
+    print(f"Funds: {len(payload['meta']['funds'])}")
     print(f"Dates: {len(payload['meta']['dates'])}")
-    print(f"Assets: {len(payload['meta']['assets'])}")
     print(f"Industry factors: {len(payload['meta']['industryFactors'])}")
     print(f"Style factors: {len(payload['meta']['styleFactors'])}")
 
