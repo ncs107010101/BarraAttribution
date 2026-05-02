@@ -69,6 +69,48 @@ function prettyFactorList(factors) {
   return (factors || []).map((f) => factorLabel(f));
 }
 
+function sortHorizontalByPrimary(labels, primary, secondary = null) {
+  const rows = labels.map((label, i) => ({
+    label,
+    primary: primary[i],
+    secondary: secondary ? secondary[i] : null,
+  }));
+  rows.sort((a, b) => {
+    const av = Number.isFinite(Number(a.primary)) ? Number(a.primary) : -Infinity;
+    const bv = Number.isFinite(Number(b.primary)) ? Number(b.primary) : -Infinity;
+    return bv - av;
+  });
+  return {
+    labels: rows.map((r) => r.label),
+    primary: rows.map((r) => r.primary),
+    secondary: rows.map((r) => r.secondary),
+  };
+}
+
+function resizePlotsInActiveTab() {
+  const panel = document.querySelector(".tab-panel.is-active");
+  if (!panel) return;
+  panel.querySelectorAll(".chart").forEach((el) => {
+    if (el?.data) Plotly.Plots.resize(el);
+  });
+}
+
+function scheduleResizeActiveTab() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => resizePlotsInActiveTab());
+  });
+}
+
+function bindWindowResize() {
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      scheduleResizeActiveTab();
+    }, 120);
+  });
+}
+
 function renderMetricCards(containerId, cards) {
   const container = document.getElementById(containerId);
   container.innerHTML = cards
@@ -331,10 +373,14 @@ function renderFactorCompareCharts(rows, prefix, withBenchmark = true) {
   const benchWeight = rows.map((r) => r.benchmark.weight);
 
   function hGroup(id, left, right, title, percent = true) {
+    const sorted = sortHorizontalByPrimary(labels, left, withBenchmark ? right : null);
+    const yLabels = sorted.labels;
+    const leftValues = sorted.primary;
+    const rightValues = withBenchmark ? sorted.secondary : [];
     const traces = [
       {
-        y: labels,
-        x: left,
+        y: yLabels,
+        x: leftValues,
         type: "bar",
         orientation: "h",
         name: "Portfolio",
@@ -344,22 +390,22 @@ function renderFactorCompareCharts(rows, prefix, withBenchmark = true) {
 
     if (withBenchmark) {
       traces.push({
-        y: labels,
-        x: right,
+        y: yLabels,
+        x: rightValues,
         type: "bar",
         orientation: "h",
         name: "Benchmark",
         marker: { color: COLOR.benchmark },
       });
-      const zeroMarkers = zeroMarkerTraceHorizontal(labels, right);
+      const zeroMarkers = zeroMarkerTraceHorizontal(yLabels, rightValues);
       if (zeroMarkers) traces.push(zeroMarkers);
     }
 
     plot(id, traces, {
       barmode: "group",
       xaxis: { title, tickformat: percent ? ".2%" : ",.3f" },
-      yaxis: { automargin: true, categoryorder: "total ascending" },
-      annotations: withBenchmark ? nearZeroAnnotation(allNearZero(right)) : [],
+      yaxis: { automargin: true, autorange: "reversed" },
+      annotations: withBenchmark ? nearZeroAnnotation(allNearZero(rightValues)) : [],
     });
   }
 
@@ -461,47 +507,59 @@ function renderStockFactorBreakdown(record, factors, prefix) {
   const exposures = factors.map((f) => f.exposure);
   const retContrib = factors.map((f) => f.returnContribution);
   const varContrib = factors.map((f) => f.varianceContribution);
+  const sortedExposure = sortHorizontalByPrimary(labels, exposures);
+  const sortedReturn = sortHorizontalByPrimary(labels, retContrib);
+  const sortedVariance = sortHorizontalByPrimary(labels, varContrib);
 
   plot(
     `chart-stock-${prefix}-exposure`,
     [
       {
-        y: labels,
-        x: exposures,
+        y: sortedExposure.labels,
+        x: sortedExposure.primary,
         type: "bar",
         orientation: "h",
         marker: { color: prefix === "industry" ? COLOR.industry : COLOR.style },
       },
     ],
-    { xaxis: { title: "Exposure", tickformat: ",.3f" }, yaxis: { automargin: true } }
+    {
+      xaxis: { title: "Exposure", tickformat: ",.3f" },
+      yaxis: { automargin: true, autorange: "reversed" },
+    }
   );
 
   plot(
     `chart-stock-${prefix}-return`,
     [
       {
-        y: labels,
-        x: retContrib,
+        y: sortedReturn.labels,
+        x: sortedReturn.primary,
         type: "bar",
         orientation: "h",
         marker: { color: prefix === "industry" ? COLOR.portfolio : COLOR.benchmark },
       },
     ],
-    { xaxis: { title: "Return Contribution", tickformat: ".2%" }, yaxis: { automargin: true } }
+    {
+      xaxis: { title: "Return Contribution", tickformat: ".2%" },
+      yaxis: { automargin: true, autorange: "reversed" },
+    }
   );
 
   plot(
     `chart-stock-${prefix}-variance`,
     [
       {
-        y: labels,
-        x: varContrib,
+        y: sortedVariance.labels,
+        x: sortedVariance.primary,
         type: "bar",
         orientation: "h",
         marker: { color: "#334155" },
       },
     ],
-    { xaxis: { title: "Variance Contribution", tickformat: ".2%" }, yaxis: { automargin: true } }
+    {
+      xaxis: { title: "Variance Contribution", tickformat: ".2%" },
+      yaxis: { automargin: true, autorange: "reversed" },
+    }
   );
 }
 
@@ -576,7 +634,7 @@ function renderFactorTab() {
     {
       margin: { l: 130, r: 20, t: 26, b: 65 },
       xaxis: { title: `Factor Return (${state.month})`, tickformat: ".2%" },
-      yaxis: { automargin: true, categoryorder: "total ascending" },
+      yaxis: { automargin: true, autorange: "reversed" },
     }
   );
 }
@@ -585,6 +643,7 @@ function renderAll() {
   renderPortfolioTab();
   renderStockTab();
   renderFactorTab();
+  scheduleResizeActiveTab();
 }
 
 function bindTabs() {
@@ -597,6 +656,7 @@ function bindTabs() {
       panels.forEach((p) => p.classList.remove("is-active"));
       button.classList.add("is-active");
       document.getElementById(target).classList.add("is-active");
+      scheduleResizeActiveTab();
     });
   });
 }
@@ -625,6 +685,7 @@ function bindControls() {
   stockSelect.addEventListener("change", (e) => {
     state.stock = e.target.value;
     renderStockTab();
+    scheduleResizeActiveTab();
   });
 }
 
@@ -634,6 +695,7 @@ async function init() {
     bindTabs();
     initSelectors();
     bindControls();
+    bindWindowResize();
     renderAll();
   } catch (error) {
     const shell = document.querySelector(".shell");
